@@ -1,0 +1,32 @@
+{
+  "name": "smart-bandage-mobile",
+  "version": "0.1.0",
+  "description": "React Native counterpart to the Phase 5 dashboard (Blueprint roadmap), against the same Phase 4 backend.",
+  "main": "index.ts",
+  "dependencies": {
+    "expo": "~57.0.18",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-web": "^0.21.0",
+    "@expo/metro-runtime": "~57.0.14"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "build:dev": "npx eas-cli build --profile development",
+    "build:preview": "npx eas-cli build --profile preview",
+    "build:production": "npx eas-cli build --profile production",
+    "submit:android": "npx eas-cli submit --platform android --profile production",
+    "submit:ios": "npx eas-cli submit --platform ios --profile production"
+  },
+  "private": true
+}

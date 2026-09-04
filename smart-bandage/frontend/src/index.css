@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+/* enables `dark:` utilities driven by a `.dark` class on <html> (toggled in JS),
+   instead of only following the OS `prefers-color-scheme`. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f7f8fb;
+  background-image:
+    radial-gradient(circle at 12% -8%, rgba(245, 158, 11, 0.14), transparent 42%),
+    radial-gradient(circle at 88% -4%, rgba(22, 35, 63, 0.1), transparent 40%),
+    radial-gradient(circle at 50% 115%, rgba(245, 158, 11, 0.06), transparent 48%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.dark body {
+  background-color: #0b1220;
+  background-image:
+    radial-gradient(circle at 12% -8%, rgba(245, 158, 11, 0.16), transparent 42%),
+    radial-gradient(circle at 88% -4%, rgba(30, 41, 59, 0.35), transparent 40%),
+    radial-gradient(circle at 50% 115%, rgba(245, 158, 11, 0.08), transparent 48%);
+}
+
+/* thin, unobtrusive scrollbars that match either theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+
+.dark * {
+  scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.5);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+::selection {
+  background: rgba(245, 158, 11, 0.35);
+  color: #16233f;
+}
+.dark ::selection {
+  background: rgba(245, 158, 11, 0.35);
+  color: #f8fafc;
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes tile-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+.animate-tile-flash {
+  animation: tile-flash 0.7s ease-out;
+}
+
+@keyframes alert-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-alert-in {
+  animation: alert-in 0.35s ease-out both;
+}
+
+@keyframes waveform {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+.animate-waveform {
+  height: 100%;
+  animation: waveform 0.9s ease-in-out infinite;
+}

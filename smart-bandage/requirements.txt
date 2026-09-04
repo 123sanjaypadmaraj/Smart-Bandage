@@ -1,0 +1,19 @@
+pydantic>=2,<3
+
+# Phase 4 -- backend/app (FastAPI + SQLAlchemy; SQLite by default, Postgres
+# via DATABASE_URL -- see backend/app/config.py)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+python-jose[cryptography]>=3.3
+bcrypt>=4.0
+# Loads a local .env for GEMINI_API_KEY etc. (backend/app/config.py) -- also
+# a transitive uvicorn[standard] dep, listed explicitly since we import it directly
+python-dotenv>=1.0
+
+# Postgres driver -- only imported once DATABASE_URL starts with
+# postgresql+psycopg2://; SQLite (the default) needs nothing extra. Kept in
+# the base file rather than a separate requirements-postgres.txt so
+# `pip install -r requirements.txt` alone is enough to go to production
+# per docs/architecture/overview.md's "Ship what already works" lane.
+psycopg2-binary>=2.9

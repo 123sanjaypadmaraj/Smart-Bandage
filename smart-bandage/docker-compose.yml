@@ -1,0 +1,68 @@
+# Brings up the Phase 4 backend + Phase 5 dashboard together, backed by
+# Postgres -- the production-shaped path and the default since Postgres is
+# what `ENVIRONMENT=production` actually requires (see
+# backend/app/config.py:Settings.validate()).
+#
+#   docker compose up --build
+#
+# Dashboard: http://localhost:5175  Backend: http://localhost:8000/docs
+# Seed login: admin / admin (dev-only, skipped when ENVIRONMENT=production --
+# see backend/app/security.py, backend/app/config.py:Settings.validate())
+#
+# Want the old zero-dependency SQLite path instead (quick demo, no `db`
+# container)? Use the standalone override file:
+#
+#   docker compose -f docker-compose.sqlite.yml up --build
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://smart_bandage:smart_bandage@db:5432/smart_bandage
+      CORS_ORIGINS: http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176,http://localhost:8081,http://localhost:8082
+      JWT_SECRET: dev-only-secret-change-me
+      # Phase 10 AI analysis (backend/app/routers/ai.py) -- optional; leave
+      # unset and GET/POST /devices/{id}/ai/* return 503, everything else
+      # works as normal. Pass through from the host shell:
+      #   GEMINI_API_KEY=... docker compose up --build
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    working_dir: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app && uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+        VITE_WS_BASE_URL: ws://localhost:8000
+    ports:
+      - "5175:80"
+    depends_on:
+      - backend
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: smart_bandage
+      POSTGRES_PASSWORD: smart_bandage
+      POSTGRES_DB: smart_bandage
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_bandage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

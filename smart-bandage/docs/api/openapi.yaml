@@ -1,0 +1,396 @@
+openapi: 3.0.3
+info:
+  title: Smart Bandage API
+  version: "0.1.0"
+  description: >
+    Contract for the Smart Bandage backend (Phase 4). Drafted before the
+    backend exists so the dashboard, mobile app, and simulator can all be
+    written against it. Simulator-produced and hardware-produced
+    measurements enter through the exact same endpoints.
+
+servers:
+  - url: http://localhost:8000
+
+paths:
+  /auth/login:
+    post:
+      summary: Issue a JWT
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: bearer }
+
+  /devices/register:
+    post:
+      summary: Register a device (physical or simulated)
+      tags: [devices]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Device" }
+      responses:
+        "201":
+          description: Device registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+
+  /devices:
+    get:
+      summary: List devices
+      tags: [devices]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Device" }
+
+  /devices/{device_id}:
+    get:
+      summary: Get one device
+      tags: [devices]
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+
+  /device-status:
+    get:
+      summary: Live health snapshot (battery, connectivity, signal quality)
+      tags: [devices]
+      parameters:
+        - $ref: "#/components/parameters/DeviceIdQuery"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceStatus" }
+
+  /measurements:
+    get:
+      summary: Query stored measurements
+      tags: [measurements]
+      parameters:
+        - $ref: "#/components/parameters/DeviceIdQuery"
+        - name: channel_id
+          in: query
+          schema: { type: string }
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MeasurementRecord" }
+    post:
+      summary: Ingest one measurement (from simulator, BLE gateway, or CSV import)
+      tags: [measurements]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MeasurementRecord" }
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MeasurementRecord" }
+
+  /measurements/{measurement_id}:
+    get:
+      summary: Get one measurement
+      tags: [measurements]
+      parameters:
+        - name: measurement_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MeasurementRecord" }
+
+  /biomarkers:
+    get:
+      summary: List known biomarker channels
+      tags: [biomarkers]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /biomarkers/{name}:
+    get:
+      summary: Latest converted value + trend for one biomarker
+      tags: [biomarkers]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BiomarkerResult" }
+
+  /alerts:
+    get:
+      summary: Active alerts
+      tags: [alerts]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Alert" }
+
+  /simulation/start:
+    post:
+      summary: Start the virtual bandage
+      tags: [simulation]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scenario: { type: string, example: normal }
+                duration: { type: integer, description: seconds }
+                noise: { type: number }
+                drift: { type: number }
+      responses:
+        "202": { description: Simulation started }
+
+  /simulation/stop:
+    post:
+      summary: Stop the virtual bandage
+      tags: [simulation]
+      responses:
+        "202": { description: Simulation stopped }
+
+  /simulation/scenario:
+    post:
+      summary: Inject one of the 7 scenarios (normal, rising, abnormal, degradation, noise, disconnect, comms_failure)
+      tags: [simulation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenario]
+              properties:
+                scenario: { type: string }
+      responses:
+        "202": { description: Scenario injected }
+
+  /devices/{device_id}/ai/insight:
+    get:
+      summary: >
+        Phase 10 -- a Gemini-generated, plain-language summary of the
+        device's recent readings and active alerts. Requires auth. 503 if
+        the backend has no GEMINI_API_KEY configured; 404 if the device is
+        unknown or has no measurement history yet.
+      tags: [ai]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIInsight" }
+        "404": { description: Device not found, or no measurement history yet }
+        "502": { description: The Gemini API call failed }
+        "503": { description: GEMINI_API_KEY is not configured on the backend }
+
+  /devices/{device_id}/ai/chat:
+    post:
+      summary: >
+        Phase 10 -- a follow-up question about the device's data, answered
+        by Gemini grounded in the same context as /ai/insight. Requires
+        auth.
+      tags: [ai]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1 }
+                history:
+                  type: array
+                  description: Prior turns, oldest first
+                  items: { $ref: "#/components/schemas/AIChatMessage" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AIChatReply" }
+        "404": { description: Device not found, or no measurement history yet }
+        "502": { description: The Gemini API call failed }
+        "503": { description: GEMINI_API_KEY is not configured on the backend }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema: { type: string }
+    DeviceIdQuery:
+      name: device_id
+      in: query
+      required: true
+      schema: { type: string }
+
+  schemas:
+    Device:
+      type: object
+      required: [device_id, name, firmware_version]
+      properties:
+        device_id: { type: string, example: SB-001 }
+        name: { type: string, example: "Prototype #1" }
+        firmware_version: { type: string, example: "0.1.0" }
+        channels:
+          type: array
+          items: { type: string }
+        status: { type: string, enum: [online, offline, unknown] }
+        last_seen: { type: string, format: date-time }
+
+    DeviceStatus:
+      type: object
+      required: [connected]
+      properties:
+        connected: { type: boolean }
+        battery: { type: integer, minimum: 0, maximum: 100 }
+        signal_quality: { type: number, minimum: 0, maximum: 1 }
+        last_error: { type: string, nullable: true }
+
+    MeasurementRecord:
+      type: object
+      required: [device_id, channel_id, timestamp, raw_signal, status]
+      properties:
+        device_id: { type: string, example: SB-001 }
+        channel_id: { type: string, example: CH-01 }
+        timestamp: { type: string, format: date-time }
+        raw_signal: { type: number, example: 0.832 }
+        processed_signal: { type: number, example: 0.791 }
+        estimated_value: { type: number, example: 123.4 }
+        unit: { type: string, example: ng/mL }
+        signal_quality: { type: number, minimum: 0, maximum: 1, example: 0.94 }
+        temperature: { type: number, example: 36.7 }
+        battery: { type: integer, minimum: 0, maximum: 100, example: 87 }
+        status: { type: string, enum: [valid, invalid, error] }
+
+    BiomarkerResult:
+      type: object
+      required: [estimated_value, unit]
+      properties:
+        estimated_value: { type: number }
+        unit: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        # Phase 6 (backend/app/routers/biomarkers.py returns BiomarkerWithTrend,
+        # a superset of this base BiomarkerResult contract):
+        trend: { type: string, enum: [rising, falling, stable, unknown] }
+        anomaly: { type: boolean, description: "processing/intelligence/anomaly.py verdict over recent history" }
+
+    Alert:
+      type: object
+      required: [type, severity, device_id, message, timestamp]
+      properties:
+        type:
+          type: string
+          enum:
+            [
+              INFO, WARNING, CRITICAL, DEVICE_ERROR, SENSOR_ERROR,
+              # Phase 6 intelligence engine (backend/app/intelligence.py) --
+              # history-based, vs. the single-reading types above
+              RAPID_TREND, SUSTAINED_TREND, QUALITY_DEGRADING,
+            ]
+        severity: { type: string, enum: [info, warning, critical] }
+        device_id: { type: string }
+        channel: { type: string }
+        message: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    AIInsight:
+      type: object
+      required: [device_id, summary, model, generated_at]
+      properties:
+        device_id: { type: string }
+        summary: { type: string, description: "Plain-language, Gemini-generated -- not a diagnosis" }
+        model: { type: string, example: gemini-3.6-flash }
+        generated_at: { type: string, format: date-time }
+
+    AIChatMessage:
+      type: object
+      required: [role, text]
+      properties:
+        role: { type: string, enum: [user, model] }
+        text: { type: string }
+
+    AIChatReply:
+      type: object
+      required: [device_id, reply, model]
+      properties:
+        device_id: { type: string }
+        reply: { type: string }
+        model: { type: string, example: gemini-3.6-flash }

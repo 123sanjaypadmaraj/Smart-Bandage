@@ -1,0 +1,51 @@
+# Standalone alternative to docker-compose.yml -- the old zero-dependency
+# path: backend + dashboard only, SQLite persisted in a volume, no `db`
+# container. Good for a quick local demo; not for concurrent writers or
+# anything you'd point `ENVIRONMENT=production` at (see
+# backend/app/config.py:Settings.validate(), which refuses SQLite there).
+#
+# A full file, not an overlay -- run it on its own, don't combine with
+# docker-compose.yml:
+#
+#   docker compose -f docker-compose.sqlite.yml up --build
+#
+# Dashboard: http://localhost:5175  Backend: http://localhost:8000/docs
+# Seed login: admin / admin
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////data/smart_bandage.db
+      CORS_ORIGINS: http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176,http://localhost:8081,http://localhost:8082
+      JWT_SECRET: dev-only-secret-change-me
+      # Phase 10 AI analysis (backend/app/routers/ai.py) -- optional; leave
+      # unset and GET/POST /devices/{id}/ai/* return 503, everything else
+      # works as normal. Pass through from the host shell:
+      #   GEMINI_API_KEY=... docker compose -f docker-compose.sqlite.yml up --build
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - backend-data:/data
+    working_dir: /app
+    # override CMD's relative sqlite path (backend/app/config.py defaults
+    # to ./smart_bandage.db) so the db file lands in the persisted volume
+    command: >
+      sh -c "cd /app && uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+        VITE_WS_BASE_URL: ws://localhost:8000
+    ports:
+      - "5175:80"
+    depends_on:
+      - backend
+
+volumes:
+  backend-data:

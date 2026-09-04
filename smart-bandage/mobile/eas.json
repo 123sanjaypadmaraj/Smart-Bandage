@@ -1,0 +1,41 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "http://localhost:8000",
+        "EXPO_PUBLIC_WS_BASE_URL": "ws://localhost:8000"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "REPLACE_WITH_STAGING_BACKEND_URL",
+        "EXPO_PUBLIC_WS_BASE_URL": "REPLACE_WITH_STAGING_BACKEND_WS_URL"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "REPLACE_WITH_PRODUCTION_BACKEND_URL",
+        "EXPO_PUBLIC_WS_BASE_URL": "REPLACE_WITH_PRODUCTION_BACKEND_WS_URL"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
