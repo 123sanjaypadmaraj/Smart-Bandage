@@ -38,12 +38,30 @@ class BatteryProcess:
     Same shape as simulator/signals/generators.py:battery_drain (monotonic
     drain plus a small wobble) but tick-by-tick and rate-coupled to link
     quality instead of a closed-form function of total elapsed time.
+
+    `_true_pct` only ever decreases (the actual charge remaining);
+    `.pct` overlays the current wobble on top of it for display, the way a
+    real fuel gauge's reported percentage jitters a little from one read to
+    the next without the underlying charge actually going up and down.
+    Bug note: an earlier version added `_wobble * dt_seconds` directly into
+    a single running `pct` every step, so the jitter never un-happened --
+    over a long run (hours/days, exactly what digital_twin/engine.py's bulk
+    generation and DT-5's backtests actually do) that additive jitter
+    behaves like a slow random walk on top of the real drain, drifting the
+    reported percentage tens of points off the true one. Recomputing `.pct`
+    fresh from `_true_pct` + the *current* wobble each time fixes that: the
+    jitter can only ever be off by one tick's wobble, never by its
+    accumulated history.
     """
 
     def __init__(self, start_pct: float = 100.0, base_drain_pct_per_hour: float = 2.0) -> None:
-        self.pct = start_pct
+        self._true_pct = start_pct
         self.base_drain_pct_per_hour = base_drain_pct_per_hour
         self._wobble = 0.0
+
+    @property
+    def pct(self) -> float:
+        return max(0.0, min(100.0, self._true_pct + self._wobble))
 
     def step(self, dt_seconds: float, link_quality: float, rng: Optional[random.Random] = None) -> float:
         if dt_seconds <= 0:
@@ -52,8 +70,8 @@ class BatteryProcess:
         # costs real battery -- up to 2.5x the base drain rate at quality 0
         retry_penalty = 1.0 + 1.5 * (1.0 - link_quality)
         drained = self.base_drain_pct_per_hour * retry_penalty * (dt_seconds / 3600.0)
+        self._true_pct = max(0.0, min(100.0, self._true_pct - drained))
         self._wobble = ou_step(self._wobble, 0.15, rng=rng)
-        self.pct = max(0.0, min(100.0, self.pct - drained + self._wobble * min(dt_seconds, 1.0)))
         return round(self.pct, 2)
 
 
