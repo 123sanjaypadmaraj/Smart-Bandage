@@ -5,32 +5,67 @@ across more than one channel at once.
 Not itself a SensorInterface implementation — SensorInterface is
 single-channel by design (Blueprint §3), and a real device has one AFE
 read cycle per channel anyway. This is the composition layer: one
-ScenarioSensor per channel, coordinated together, which is what
+SensorInterface backend per channel, coordinated together, which is what
 backend/app (Phase 4) actually drives per device.
+
+DT-3: that per-channel backend is opt-in, not fixed to ScenarioSensor.
+Passing `engine="digital_twin"` backs every channel with a
+DigitalTwinSensor (digital_twin/adapter.py) instead -- same
+SensorInterface, same per-channel isolation in `read_all()`, but ticking
+on DigitalTwinEngine's seeded, wall-clock-decoupled loop
+(digital_twin/engine.py). Default stays "scenario" so nothing existing
+changes; a caller has to ask for the twin explicitly.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Literal, Optional
 
+from common.interfaces.sensor_interface import SensorInterface
 from common.schemas.device import DeviceStatus
 from common.schemas.measurement import RawMeasurement
+from digital_twin.adapter import DigitalTwinSensor
+from digital_twin.engine import DigitalTwinEngine
 from simulator.sensors.scenario_sensor import ScenarioSensor
+
+EngineName = Literal["scenario", "digital_twin"]
 
 
 class MultiChannelSensor:
-    """Owns one ScenarioSensor per channel_id for a single device."""
+    """Owns one SensorInterface backend per channel_id for a single device."""
 
     def __init__(
         self,
         device_id: str,
         channel_ids: Iterable[str],
         default_scenario: str = "normal",
+        engine: EngineName = "scenario",
+        seed: Optional[int] = None,
+        dt_seconds: float = 1.0,
     ) -> None:
         self.device_id = device_id
-        self.channels: Dict[str, ScenarioSensor] = {
-            channel_id: ScenarioSensor(device_id, channel_id, scenario=default_scenario)
-            for channel_id in channel_ids
-        }
+        self.engine = engine
+        if engine == "scenario":
+            self.channels: Dict[str, SensorInterface] = {
+                channel_id: ScenarioSensor(device_id, channel_id, scenario=default_scenario)
+                for channel_id in channel_ids
+            }
+        elif engine == "digital_twin":
+            # Distinct seed per channel (still derived from one base seed)
+            # so a reproducible device doesn't play the identical noise
+            # trace on every channel; `seed=None` stays non-reproducible
+            # per channel, same as leaving it unset on a single sensor.
+            self.channels = {
+                channel_id: DigitalTwinSensor(
+                    device_id,
+                    channel_id,
+                    scenario=default_scenario,
+                    dt_seconds=dt_seconds,
+                    seed=None if seed is None else seed + index,
+                )
+                for index, channel_id in enumerate(channel_ids)
+            }
+        else:
+            raise ValueError(f"unknown engine {engine!r}; expected 'scenario' or 'digital_twin'")
 
     def initialize(self) -> None:
         for sensor in self.channels.values():
@@ -70,3 +105,12 @@ class MultiChannelSensor:
         if channel_id is not None:
             return self.channels[channel_id].get_status()
         return {cid: sensor.get_status() for cid, sensor in self.channels.items()}
+
+    def engine_for(self, channel_id: str) -> Optional[DigitalTwinEngine]:
+        """The channel's underlying DigitalTwinEngine, or None when this
+        device was built with `engine="scenario"`. The escape hatch to
+        DigitalTwinEngine.run() -- generating hours or days of trajectory
+        in one call -- which SensorInterface's one-read-per-call contract
+        (what read_channel()/read_all() speak) has no room to express."""
+        sensor = self.channels[channel_id]
+        return sensor.engine if isinstance(sensor, DigitalTwinSensor) else None
