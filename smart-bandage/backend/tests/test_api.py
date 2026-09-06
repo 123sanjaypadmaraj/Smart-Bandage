@@ -339,3 +339,166 @@ def test_websocket_receives_live_measurements(client, auth_headers):
             assert message["type"] in ("measurement", "alert")
     finally:
         client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+# ---- DT-6: twin-backed simulation mode ----
+
+
+def test_patient_profiles_are_listed_without_auth(client):
+    resp = client.get("/simulation/patient-profiles")
+    assert resp.status_code == 200
+    names = {p["name"] for p in resp.json()}
+    assert {"healthy_baseline", "diabetic_slow_healing", "immunocompromised_high_risk"} <= names
+    assert all(p["description"] for p in resp.json())
+
+
+def test_twin_ground_truth_404s_before_any_simulation_runs(client):
+    resp = client.get("/simulation/twin/no-such-device")
+    assert resp.status_code == 404
+
+
+def test_twin_backed_simulation_produces_measurements_and_ground_truth(client, auth_headers):
+    """POST /simulation/start with a patient_profile should drive
+    DigitalTwinDevice (digital_twin/observation.py) instead of the scenario
+    script, still through the exact same measurement/alert/WS pipeline."""
+    device_id = "SB-800"
+    start = client.post(
+        "/simulation/start",
+        json={
+            "device_id": device_id,
+            "channels": ["CH-01"],
+            "patient_profile": "diabetic_slow_healing",
+            "time_scale": 200.0,
+        },
+        headers=auth_headers,
+    )
+    assert start.status_code == 202, start.text
+    assert start.json()["twin"] is True
+
+    try:
+        deadline = time.monotonic() + 3.0
+        ground_truth = None
+        while time.monotonic() < deadline:
+            resp = client.get(f"/simulation/twin/{device_id}")
+            if resp.status_code == 200:
+                ground_truth = resp.json()
+                break
+            time.sleep(0.1)
+        assert ground_truth is not None, "twin never produced a ground-truth snapshot"
+        assert ground_truth["patient_profile"] == "diabetic_slow_healing"
+        assert ground_truth["time_scale"] == 200.0
+        assert ground_truth["channel_id"] == "CH-01"
+        assert 0.0 <= ground_truth["bacterial_load"] <= 1.5
+
+        measurements = client.get("/measurements", params={"device_id": device_id}).json()
+        assert measurements, "twin-backed simulation never produced a stored measurement"
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+def test_twin_backed_simulation_rejects_scenario_injection(client, auth_headers):
+    device_id = "SB-801"
+    client.post(
+        "/simulation/start",
+        json={"device_id": device_id, "channels": ["CH-01"], "patient_profile": "healthy_baseline"},
+        headers=auth_headers,
+    )
+    try:
+        resp = client.post(
+            "/simulation/scenario",
+            json={"device_id": device_id, "scenario": "normal"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+def test_twin_backed_simulation_start_rejects_unknown_patient_profile(client, auth_headers):
+    resp = client.post(
+        "/simulation/start",
+        json={"device_id": "SB-802", "channels": ["CH-01"], "patient_profile": "no-such-profile"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_twin_backed_simulation_start_rejects_empty_channels(client, auth_headers):
+    """A twin needs at least one channel to drive -- previously an empty
+    `channels` list reached `channel_ids[0]` in DeviceSimulation.__init__
+    and raised an unhandled IndexError (500) instead of a clean 400."""
+    resp = client.post(
+        "/simulation/start",
+        json={"device_id": "SB-804", "channels": [], "patient_profile": "healthy_baseline"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_twin_backed_simulation_start_rejects_unknown_twin_channel_id(client, auth_headers):
+    """A twin_channel_id outside `channels` previously passed validation
+    silently -- the ground-truth channel condition in DeviceSimulation._tick
+    would then never match, so GET /simulation/twin/{id} 404'd forever
+    instead of the request being rejected up front."""
+    resp = client.post(
+        "/simulation/start",
+        json={
+            "device_id": "SB-805",
+            "channels": ["CH-01"],
+            "patient_profile": "healthy_baseline",
+            "twin_channel_id": "CH-99",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_twin_backed_simulation_honors_explicit_twin_channel_id(client, auth_headers):
+    """With multiple channels, twin_channel_id picks which one the
+    ground-truth overlay tracks instead of always defaulting to the first."""
+    device_id = "SB-806"
+    start = client.post(
+        "/simulation/start",
+        json={
+            "device_id": device_id,
+            "channels": ["CH-01", "CH-02"],
+            "patient_profile": "healthy_baseline",
+            "twin_channel_id": "CH-02",
+        },
+        headers=auth_headers,
+    )
+    assert start.status_code == 202, start.text
+
+    try:
+        deadline = time.monotonic() + 3.0
+        ground_truth = None
+        while time.monotonic() < deadline:
+            resp = client.get(f"/simulation/twin/{device_id}")
+            if resp.status_code == 200:
+                ground_truth = resp.json()
+                break
+            time.sleep(0.1)
+        assert ground_truth is not None, "twin never produced a ground-truth snapshot"
+        assert ground_truth["channel_id"] == "CH-02"
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+def test_websocket_receives_twin_ground_truth_broadcast(client, auth_headers):
+    device_id = "SB-803"
+    client.post(
+        "/simulation/start",
+        json={"device_id": device_id, "channels": ["CH-01"], "patient_profile": "healthy_baseline"},
+        headers=auth_headers,
+    )
+    try:
+        with client.websocket_connect(f"/ws/devices/{device_id}") as ws:
+            seen_types = set()
+            for _ in range(6):
+                message = ws.receive_json()
+                seen_types.add(message["type"])
+                if "twin_ground_truth" in seen_types:
+                    break
+            assert "twin_ground_truth" in seen_types
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)

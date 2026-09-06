@@ -1,144 +1,94 @@
 """
-DT-1 deliverable: a per-device hidden state model.
+DT-2: the physiological state a device's channels are observations of.
 
-Every scenario built so far (simulator/scenarios/scenarios.py) is a script:
-a fixed checkpoint array (`ramp_checkpoints`, `spike_checkpoints`) that
-simulator/sensors/scenario_sensor.py eases its displayed signal toward,
-indexed by read count. It can replay a shape but it can't *evolve* --
-there's nothing underneath the checkpoints that responds to time the way a
-real wound does, and two runs at different read rates play back identical
-checkpoint sequences instead of covering different amounts of physiological
-time.
+simulator/scenarios.py scripts each channel's signal independently (a
+checkpoint list per channel). That's fine for exercising one failure mode
+in isolation, but it can't produce the thing DT-2 unlocks: several channels
+moving together because they share one underlying cause. WoundState is
+that shared cause -- one instance per device, read (never scripted) by
+every channel's transfer function in digital_twin/observation.py.
 
-`DeviceState` is that underneath: a small hidden state vector --
-
-    bacterial_load          -- 0..1, fraction of local carrying capacity
-    inflammation             -- 0..1
-    healing_stage_progress   -- 0..1
-    moisture                  -- 0..1
-
--- integrated forward one tick at a time with a first-order (forward) Euler
-step, `x[t+dt] = x[t] + dt * dx/dt(x[t])`, instead of being read off a
-pre-authored array. The state lives on the `DigitalTwinState` instance and
-persists across ticks; nothing resets it except constructing a new one, and
-each tick only ever depends on the state the previous tick produced plus
-how much time passed -- not on a read index.
-
-DT-1 proves this on exactly one channel end-to-end (hidden state ->
-observable biomarker): `bacterial_load` grows by a logistic infection model
-and `infection_biomarker()` turns that hidden load into the observable
-biomarker value. `inflammation` / `healing_stage_progress` / `moisture` are
-carried in the vector already -- so its shape doesn't have to change under
-later tickets -- but get zero dynamics for now (`_zero_derivative`) and
-simply hold their initial value. Wiring them to real dynamics, and wiring
-any of this into ScenarioSensor/ChannelPipeline, is later DT tickets.
+Deliberately small and not a clinical model of wound healing -- four
+latent variables, each a bounded mean-reverting random walk -- just enough
+shared structure for multiple electrodes to plausibly respond to the same
+underlying process, the way real channels on the same wound bed do.
 """
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
-from typing import Optional
+import random
+from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
-class DeviceState:
-    """The hidden state vector for one device.
+def _revert(
+    current: float,
+    target: float,
+    rate_per_second: float,
+    vol: float,
+    dt_seconds: float,
+    lo: float,
+    hi: float,
+) -> float:
+    """One step of a mean-reverting random walk toward `target` -- the same
+    Ornstein-Uhlenbeck process simulator/signals/generators.py:ou_step
+    already uses for per-read noise, generalized to a non-zero `target` and
+    an arbitrary `dt_seconds` instead of a fixed per-tick `phi`.
 
-    Frozen -- `DigitalTwinState.tick()` replaces its held instance each
-    tick rather than mutating fields in place, so a snapshot handed to a
-    caller (e.g. for logging or a test assertion) can never change out from
-    under them later.
+    Uses the *exact* OU transition (decay = exp(-rate * dt), innovation
+    variance = vol^2 * (1 - decay^2) / (2 * rate)) rather than an Euler
+    step -- a plain `current + rate * (target - current) * dt` blows past
+    `target` (and the clamp below) once `rate * dt_seconds` exceeds ~1,
+    which a running process advanced by real wall-clock elapsed time will
+    eventually hit. The exact transition stays correct for any dt_seconds,
+    including a large jump after a paused/resumed session.
+    """
+    if rate_per_second <= 0 or dt_seconds <= 0:
+        return max(lo, min(hi, current))
+    decay = math.exp(-rate_per_second * dt_seconds)
+    reverted = target + (current - target) * decay
+    noise_std = vol * math.sqrt((1.0 - decay * decay) / (2.0 * rate_per_second))
+    innovation = random.gauss(0.0, noise_std)
+    return max(lo, min(hi, reverted + innovation))
+
+
+@dataclass
+class WoundState:
+    """Latent physiological state shared by every channel on a device.
+
+    Each variable reverts toward its own `*_target` -- retarget one (e.g.
+    `state.bacterial_load_target = 0.9` to script an infection onset) to
+    move the whole state over time, the continuous analogue of
+    simulator/scenarios.py's checkpoint list. `step()` is the "running
+    process"; nothing in digital_twin/observation.py ever sets these
+    values directly.
     """
 
-    bacterial_load: float = 0.05
-    inflammation: float = 0.0
-    healing_stage_progress: float = 0.0
-    moisture: float = 0.5
+    inflammation: float = 0.1  # 0 (none) .. 1.5 (severe) -- CRP/pathogen + temperature + pH
+    bacterial_load: float = 0.05  # 0 (sterile) .. 1.5 (heavily colonized) -- pathogen + pH
+    moisture: float = 0.5  # 0 (dry) .. 1 (saturated) -- impedance baseline + electrode fouling rate
+    perfusion: float = 0.7  # 0 (poor) .. 1 (well-perfused) -- temperature + baseline stability
 
+    inflammation_target: float = 0.1
+    bacterial_load_target: float = 0.05
+    moisture_target: float = 0.5
+    perfusion_target: float = 0.7
 
-@dataclass(frozen=True)
-class BacterialLoadParams:
-    """Logistic growth: `dB/dt = growth_rate * B * (1 - B / carrying_capacity)`
-    -- the standard bounded-population model for unchecked bacterial growth
-    at a wound site. Slow to start, fastest at `B == carrying_capacity / 2`,
-    saturating at `carrying_capacity` instead of diverging, the way a real
-    site with finite nutrients/space would."""
-
-    growth_rate: float = 0.01
-    carrying_capacity: float = 1.0
-
-
-def _bacterial_load_derivative(state: DeviceState, params: BacterialLoadParams) -> float:
-    b = state.bacterial_load
-    return params.growth_rate * b * (1.0 - b / params.carrying_capacity)
-
-
-def _zero_derivative(state: DeviceState) -> float:
-    """Placeholder dynamics for the channels DT-1 doesn't wire yet. Held at
-    zero (not omitted from the vector) so the state's shape is final now
-    without inventing inflammation/healing/moisture physiology ahead of
-    their own ticket -- see module docstring."""
-    return 0.0
-
-
-def infection_biomarker(bacterial_load: float, midpoint: float = 0.3, steepness: float = 8.0) -> float:
-    """Hidden `bacterial_load` (0..1, fraction of carrying capacity) -> the
-    observable infection biomarker, on a 0..100 a.u. scale matching the
-    rest of the simulator's channels (simulator/scenarios/scenarios.py's
-    `baseline=100.0` convention).
-
-    A logistic response curve, not a linear one: real infection assays
-    saturate at high bacterial load and sit near a floor at low load rather
-    than reading out proportionally, so this is deliberately a sigmoid of
-    `bacterial_load` around `midpoint` (how much load it takes to read as
-    "infected"), not `bacterial_load * 100`.
-    """
-    x = steepness * (bacterial_load - midpoint)
-    return 100.0 / (1.0 + math.exp(-x))
-
-
-class DigitalTwinState:
-    """Owns one device's `DeviceState` and Euler-integrates it forward one
-    tick at a time. Nothing here reads from a checkpoint array or a read
-    index -- see module docstring.
-    """
-
-    def __init__(
-        self,
-        initial: Optional[DeviceState] = None,
-        bacterial_load_params: Optional[BacterialLoadParams] = None,
-    ) -> None:
-        self.state = initial if initial is not None else DeviceState()
-        self._bacterial_load_params = bacterial_load_params or BacterialLoadParams()
-
-    def tick(self, dt_seconds: float) -> DeviceState:
-        """Advance the state by `dt_seconds` with one explicit (forward)
-        Euler step per field: `x_next = x + dt * dx/dt(x)`.
-
-        `dt_seconds` should stay small relative to the fastest dynamics in
-        play -- the default `growth_rate` keeps that true for read
-        intervals up to several seconds. Euler integration is only
-        first-order accurate: a caller taking too large a step against
-        faster dynamics would see the estimate diverge or oscillate instead
-        of tracking the true curve.
-        """
-        if dt_seconds < 0:
-            raise ValueError(f"dt_seconds must be >= 0, got {dt_seconds}")
-
-        s = self.state
-        params = self._bacterial_load_params
-        bacterial_load = s.bacterial_load + dt_seconds * _bacterial_load_derivative(s, params)
-        # Defensive clamp: within-range logistic growth never crosses these
-        # bounds in continuous time (the derivative vanishes at both), but a
-        # large enough dt_seconds can make a first-order Euler step
-        # overshoot past them.
-        bacterial_load = min(max(bacterial_load, 0.0), params.carrying_capacity)
-
-        self.state = replace(
-            s,
-            bacterial_load=bacterial_load,
-            inflammation=s.inflammation + dt_seconds * _zero_derivative(s),
-            healing_stage_progress=s.healing_stage_progress + dt_seconds * _zero_derivative(s),
-            moisture=s.moisture + dt_seconds * _zero_derivative(s),
+    def step(self, dt_seconds: float) -> None:
+        """Advance the state by `dt_seconds` of wall-clock time. A no-op
+        for dt_seconds <= 0 so repeated reads at (near-)the same instant --
+        e.g. one channel read right after another in the same cycle --
+        don't each perturb the shared state independently."""
+        if dt_seconds <= 0:
+            return
+        self.inflammation = _revert(
+            self.inflammation, self.inflammation_target, 0.15, 0.012, dt_seconds, 0.0, 1.5
         )
-        return self.state
+        self.bacterial_load = _revert(
+            self.bacterial_load, self.bacterial_load_target, 0.12, 0.010, dt_seconds, 0.0, 1.5
+        )
+        self.moisture = _revert(
+            self.moisture, self.moisture_target, 0.25, 0.015, dt_seconds, 0.0, 1.0
+        )
+        self.perfusion = _revert(
+            self.perfusion, self.perfusion_target, 0.2, 0.012, dt_seconds, 0.0, 1.0
+        )

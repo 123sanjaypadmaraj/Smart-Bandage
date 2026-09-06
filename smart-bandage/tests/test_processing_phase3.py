@@ -5,6 +5,7 @@ simulator.
 """
 from __future__ import annotations
 
+import random
 from datetime import date, datetime, timezone
 
 import pytest
@@ -130,6 +131,12 @@ def test_validate_raw_accepts_normal_reading():
 
 
 def test_pipeline_produces_valid_records_for_normal_scenario():
+    # ScenarioSensor draws from the global, unseeded `random` module (see
+    # digital_twin/engine.py's DT-3 docstring, which seeds its own draws for
+    # exactly this reason), so the final signal_quality below depends on how
+    # many random() calls other tests already made this process. Seed it
+    # locally so this test's outcome doesn't depend on suite run order.
+    random.seed(0)
     calibration = CalibrationParameters(
         sensor_type="pathogen_channel_1",
         version="1.0",
