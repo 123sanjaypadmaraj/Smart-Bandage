@@ -2,3 +2,6 @@
 pytest>=8
 httpx>=0.27
 websockets>=12
+# DT-7 -- property-based tests over digital_twin/state.py (see conftest.py
+# for the "default"/"ci" Hypothesis profile split)
+hypothesis>=6.100
