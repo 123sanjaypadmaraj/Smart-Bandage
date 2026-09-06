@@ -5,7 +5,7 @@ import type { Device } from "../types";
 
 interface Props {
   token: string;
-  onSelectDevice: (deviceId: string) => void;
+  onSelectDevice: (device: Device) => void;
   onLogout: () => void;
 }
 
@@ -58,7 +58,7 @@ export function DevicesScreen({ token, onSelectDevice, onLogout }: Props) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#22d3ee" />}
         ListEmptyComponent={<Text style={styles.empty}>No devices yet -- register one from the dashboard.</Text>}
         renderItem={({ item }) => (
-          <Pressable style={styles.row} onPress={() => onSelectDevice(item.device_id)}>
+          <Pressable style={styles.row} onPress={() => onSelectDevice(item)}>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>{item.name}</Text>
               <Text style={styles.rowSubtitle}>{item.device_id}</Text>

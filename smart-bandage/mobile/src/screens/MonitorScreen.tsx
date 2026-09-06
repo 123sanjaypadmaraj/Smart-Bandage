@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { api, ApiError } from "../api";
 import { useDeviceSocket } from "../hooks/useDeviceSocket";
+import { TwinControlPanel } from "../components/TwinControlPanel";
 import type { AIChatTurn, DeviceStatus } from "../types";
 
 interface Props {
   token: string;
   deviceId: string;
+  channels: string[];
   onBack: () => void;
 }
 
@@ -14,9 +16,9 @@ interface Props {
  * useDeviceSocket), GET /device-status + WS /ws/devices/{id}. No chart
  * library here -- the live readings feed and alerts list carry the same
  * information a phone screen has room to show. */
-export function MonitorScreen({ token, deviceId, onBack }: Props) {
+export function MonitorScreen({ token, deviceId, channels, onBack }: Props) {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
-  const { connected, lastMeasurement, liveAlerts } = useDeviceSocket(deviceId);
+  const { connected, lastMeasurement, liveAlerts, lastGroundTruth } = useDeviceSocket(deviceId);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +121,8 @@ export function MonitorScreen({ token, deviceId, onBack }: Props) {
       )}
 
       <ScrollView style={{ flex: 1 }}>
+        <TwinControlPanel token={token} deviceId={deviceId} channels={channels} lastGroundTruth={lastGroundTruth} />
+
         <Text style={styles.sectionTitle}>Alerts</Text>
         {liveAlerts.length === 0 && <Text style={styles.empty}>No active alerts.</Text>}
         {liveAlerts.map((alert, i) => (
