@@ -21,13 +21,24 @@ by design (common/interfaces/sensor_interface.py); this mirrors
 simulator/sensors/multi_channel_sensor.py's per-device, per-channel
 composition instead, so it's a drop-in alternative data source for the same
 callers (ingestion pipeline, backend simulation endpoints) once wired in.
+digital_twin/adapter.py is the SensorInterface-shaped, single-channel
+wrapper for callers (MultiChannelSensor's `engine="digital_twin"` opt-in)
+that specifically need that contract.
+
+Consolidation note (DT-3/DT-7): `seed=` makes a device's entire trajectory
+-- WoundState, battery/fouling/link-quality processes, and per-channel
+noise/jitter -- reproducible bit-for-bit, by giving it one private
+`random.Random` threaded through every random draw below instead of the
+global `random` module. `digital_twin/engine.py` is what actually exercises
+this for CI/regression use; a caller that never passes `seed` keeps
+drawing from the global module exactly as before DT-3 landed.
 """
 from __future__ import annotations
 
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from common.schemas.device import DeviceStatus
@@ -124,18 +135,30 @@ class DigitalTwinDevice:
         state: Optional[WoundState] = None,
         battery_start_pct: float = 100.0,
         battery_drain_pct_per_hour: float = 2.0,
+        seed: Optional[int] = None,
+        start_time: Optional[datetime] = None,
     ) -> None:
         self.device_id = device_id
         self.channels = dict(channels)  # channel_id -> sensor_type
         self._initial_state = state
         self.battery_start_pct = battery_start_pct
         self.battery_drain_pct_per_hour = battery_drain_pct_per_hour
+        self.seed = seed
+        # None (the default) timestamps every reading with the real
+        # wall-clock time it was produced -- right for a live simulation.
+        # digital_twin/engine.py passes a fixed epoch instead, so a seeded
+        # run's RawMeasurement.timestamp values are reproducible too, not
+        # just its signal values.
+        self.start_time = start_time
         self.initialize()
 
     def initialize(self) -> None:
         self._running = False
         self._last_tick: Optional[float] = None
         self._elapsed_total = 0.0
+        # None (the default) draws from the global `random` module, same as
+        # before `seed` existed -- see module docstring.
+        self._rng = random.Random(self.seed) if self.seed is not None else None
 
         self.state = self._initial_state if self._initial_state is not None else WoundState()
         self.battery = BatteryProcess(
@@ -160,6 +183,15 @@ class DigitalTwinDevice:
 
         self._temp_noise = 0.0
 
+    def reset(self, seed: Optional[int] = None) -> None:
+        """Rewind every process to its starting point and reseed --
+        digital_twin/engine.py's `DigitalTwinEngine.reset()` calls this so
+        the same seed replays a run bit-for-bit. `seed=None` reverts to
+        drawing from the global `random` module (unseeded), same as never
+        passing `seed` to `__init__`."""
+        self.seed = seed
+        self.initialize()
+
     def start_measurement(self) -> None:
         self._running = True
         self._last_tick = time.monotonic()
@@ -182,12 +214,17 @@ class DigitalTwinDevice:
 
         if dt_seconds > 0:
             self._elapsed_total += dt_seconds
-            self.state.step(dt_seconds)
-            quality = self.link_quality.step(dt_seconds)
-            self.battery.step(dt_seconds, link_quality=quality)
+            self.state.step(dt_seconds, rng=self._rng)
+            quality = self.link_quality.step(dt_seconds, rng=self._rng)
+            self.battery.step(dt_seconds, link_quality=quality, rng=self._rng)
             for fouling in self._fouling.values():
-                fouling.step(dt_seconds, moisture=self.state.moisture, bacterial_load=self.state.bacterial_load)
-            self._temp_noise = ou_step(self._temp_noise, 0.2)
+                fouling.step(
+                    dt_seconds,
+                    moisture=self.state.moisture,
+                    bacterial_load=self.state.bacterial_load,
+                    rng=self._rng,
+                )
+            self._temp_noise = ou_step(self._temp_noise, 0.2, rng=self._rng)
 
         return dt_seconds
 
@@ -202,7 +239,7 @@ class DigitalTwinDevice:
         link_quality = self.link_quality.value
         try:
             self._sustained_disconnect[channel_id].check(link_quality)
-            self._dropout[channel_id].check(link_quality)
+            self._dropout[channel_id].check(link_quality, rng=self._rng)
         except SensorDisconnectedError as exc:
             self._connected[channel_id] = False
             self._last_error[channel_id] = str(exc)
@@ -222,17 +259,25 @@ class DigitalTwinDevice:
         # here the multiplier comes from a running fouling level instead of
         # a fixed 8x.
         effective_noise_std = NoiseAmplifier(multiplier=1.0 + 3.0 * fouling_level).apply(profile.noise_std)
-        self._channel_noise[channel_id] = ou_step(self._channel_noise[channel_id], effective_noise_std)
+        self._channel_noise[channel_id] = ou_step(
+            self._channel_noise[channel_id], effective_noise_std, rng=self._rng
+        )
 
         raw_signal = self._observe_signal(profile, fouling_level, self._channel_noise[channel_id])
 
-        jitter = random.gauss(0.0, 0.004)
+        generator = self._rng if self._rng is not None else random
+        jitter = generator.gauss(0.0, 0.004)
         self._last_quality[channel_id] = max(0.05, min(0.98, 0.98 - 0.9 * fouling_level + jitter))
+
+        if self.start_time is not None:
+            timestamp = self.start_time + timedelta(seconds=self._elapsed_total)
+        else:
+            timestamp = datetime.now(timezone.utc)
 
         return RawMeasurement(
             device_id=self.device_id,
             channel_id=channel_id,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=timestamp,
             raw_signal=round(raw_signal, 4),
             temperature=round(
                 temperature_generator(
@@ -245,19 +290,34 @@ class DigitalTwinDevice:
             battery=round(self.battery.pct),
         )
 
-    def _observe_signal(self, profile: ChannelProfile, fouling_level: float, noise: float) -> float:
-        """The state -> raw_signal transfer function for one channel: a
-        linear response to WoundState, attenuated toward baseline as the
-        electrode fouls (a biofilm-coated electrode reads a damped version
-        of the true signal), plus this read's noise."""
+    def true_signal(self, channel_id: str) -> float:
+        """The clean (no electrode fouling, no per-read noise) value
+        `channel_id` would report for the twin's *current* hidden state --
+        ground truth, for whoever needs to score the noisy/fouled
+        `read_channel()` value against it (a dev-only frontend overlay
+        today; a DT-5 backtest is the other legitimate caller). Deliberately
+        not part of SensorInterface and not derivable from a RawMeasurement
+        alone -- see digital_twin/state.py's WoundState docstring on why
+        this must never leak onto a real device.
+        """
+        return self._true_response(get_channel_profile(self.channels[channel_id]))
+
+    def _true_response(self, profile: ChannelProfile) -> float:
         s = self.state
-        true_response = (
+        return (
             profile.baseline
             + profile.inflammation_gain * s.inflammation
             + profile.bacterial_load_gain * s.bacterial_load
             + profile.moisture_gain * (s.moisture - 0.5)
             + profile.perfusion_gain * (s.perfusion - 0.7)
         )
+
+    def _observe_signal(self, profile: ChannelProfile, fouling_level: float, noise: float) -> float:
+        """The state -> raw_signal transfer function for one channel: a
+        linear response to WoundState, attenuated toward baseline as the
+        electrode fouls (a biofilm-coated electrode reads a damped version
+        of the true signal), plus this read's noise."""
+        true_response = self._true_response(profile)
         attenuation = 1.0 - 0.5 * fouling_level
         signal = profile.baseline + (true_response - profile.baseline) * attenuation
         return signal + noise
