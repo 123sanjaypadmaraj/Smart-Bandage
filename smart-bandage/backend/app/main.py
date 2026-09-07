@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
 from backend.app.database import SessionLocal, init_db
+from backend.app.rate_limit import login_rate_limiter, refresh_rate_limiter
 from backend.app.routers import ai, alerts, auth, biomarkers, devices, measurements, simulation, ws
 from backend.app.security import ensure_seed_user
 
@@ -25,6 +26,11 @@ from backend.app.security import ensure_seed_user
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate()  # raises ConfigurationError if ENVIRONMENT=production with dev-only defaults
+    # Clean slate per process start -- also what makes each test's fresh
+    # `TestClient(app)` (which re-runs this lifespan) not see rate-limit
+    # state left over from an earlier test.
+    login_rate_limiter.reset()
+    refresh_rate_limiter.reset()
     init_db()
     if not settings.is_production:
         db = SessionLocal()

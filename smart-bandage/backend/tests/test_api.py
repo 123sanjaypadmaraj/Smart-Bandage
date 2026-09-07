@@ -86,6 +86,36 @@ def test_refresh_rejects_garbage_token(client):
     assert resp.status_code == 401
 
 
+def test_protected_endpoint_rejects_a_refresh_token_used_as_bearer(client):
+    """A refresh token is longer-lived (JWT_REFRESH_EXPIRES_DAYS, 30 days by
+    default) than an access token (JWT_EXPIRES_MINUTES, 180 minutes) and is
+    told apart only by its "typ" claim -- make sure it can't be used
+    directly as a Bearer access token on a protected endpoint, which would
+    otherwise let anyone holding a refresh token skip the shorter-lived
+    access-token model entirely."""
+    login = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    refresh_token = login.json()["refresh_token"]
+
+    resp = client.post(
+        "/devices/register",
+        json={"device_id": "SB-999", "name": "x", "firmware_version": "0.1.0"},
+        headers={"Authorization": f"Bearer {refresh_token}"},
+    )
+    assert resp.status_code == 401
+
+
+def test_login_rate_limited_after_repeated_failures(client):
+    for _ in range(10):
+        resp = client.post("/auth/login", json={"username": "admin", "password": "wrong"})
+        assert resp.status_code == 401
+    resp = client.post("/auth/login", json={"username": "admin", "password": "wrong"})
+    assert resp.status_code == 429
+
+    # A correct password doesn't bypass the limiter once it's tripped.
+    resp = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert resp.status_code == 429
+
+
 def test_register_requires_auth(client):
     resp = client.post(
         "/devices/register",
