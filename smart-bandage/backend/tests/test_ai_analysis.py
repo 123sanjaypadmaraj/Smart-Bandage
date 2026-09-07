@@ -74,7 +74,9 @@ def _register_device(client, auth_headers, device_id="SB-AI-1", channels=("CH-01
     return device_id
 
 
-def _ingest_measurement(client, device_id, channel_id="CH-01", estimated_value=4.5, timestamp="2026-08-31T12:00:00Z"):
+def _ingest_measurement(
+    client, auth_headers, device_id, channel_id="CH-01", estimated_value=4.5, timestamp="2026-08-31T12:00:00Z"
+):
     resp = client.post(
         "/measurements",
         json={
@@ -88,13 +90,14 @@ def _ingest_measurement(client, device_id, channel_id="CH-01", estimated_value=4
             "signal_quality": 0.9,
             "status": "valid",
         },
+        headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
 
 
 def _seed_device_with_measurement(client, auth_headers, device_id="SB-AI-1"):
     _register_device(client, auth_headers, device_id)
-    _ingest_measurement(client, device_id)
+    _ingest_measurement(client, auth_headers, device_id)
     return device_id
 
 

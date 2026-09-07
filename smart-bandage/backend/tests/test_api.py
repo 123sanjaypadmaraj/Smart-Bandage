@@ -144,7 +144,26 @@ def test_register_and_fetch_device(client, auth_headers):
     assert missing.status_code == 404
 
 
-def test_ingest_and_query_measurement(client):
+def test_ingest_measurement_requires_auth(client):
+    """POST /measurements used to accept data for any device_id with no
+    auth at all (unauthenticated data injection). Gated behind the same
+    user JWT login as the rest of the authenticated API now -- not a real
+    per-device credential (see docs/security.md), but it closes off
+    anonymous writes."""
+    resp = client.post(
+        "/measurements",
+        json={
+            "device_id": "SB-200",
+            "channel_id": "CH-01",
+            "timestamp": "2026-08-30T14:52:00Z",
+            "raw_signal": 0.832,
+            "status": "valid",
+        },
+    )
+    assert resp.status_code == 401
+
+
+def test_ingest_and_query_measurement(client, auth_headers):
     payload = {
         "device_id": "SB-200",
         "channel_id": "CH-01",
@@ -158,7 +177,7 @@ def test_ingest_and_query_measurement(client):
         "battery": 87,
         "status": "valid",
     }
-    ingested = client.post("/measurements", json=payload)
+    ingested = client.post("/measurements", json=payload, headers=auth_headers)
     assert ingested.status_code == 201, ingested.text
 
     listed = client.get("/measurements", params={"device_id": "SB-200"})
@@ -167,7 +186,7 @@ def test_ingest_and_query_measurement(client):
     assert listed.json()[0]["estimated_value"] == 123.4
 
 
-def test_biomarker_trend_needs_enough_history_before_committing(client):
+def test_biomarker_trend_needs_enough_history_before_committing(client, auth_headers):
     """Phase 6: two readings isn't enough for the least-squares detector
     (processing/intelligence/trend.py, min_samples=5 by default) to call a
     direction -- it honestly reports "unknown" rather than overfit noise
@@ -181,8 +200,16 @@ def test_biomarker_trend_needs_enough_history_before_committing(client):
     }
     # <15% apart so this alone doesn't also trip the rapid_change anomaly
     # check -- isolates "not enough history for a trend" from "anomalous"
-    client.post("/measurements", json={**base, "timestamp": "2026-08-30T14:00:00Z", "raw_signal": 1.0, "estimated_value": 100.0})
-    client.post("/measurements", json={**base, "timestamp": "2026-08-30T14:01:00Z", "raw_signal": 1.05, "estimated_value": 105.0})
+    client.post(
+        "/measurements",
+        json={**base, "timestamp": "2026-08-30T14:00:00Z", "raw_signal": 1.0, "estimated_value": 100.0},
+        headers=auth_headers,
+    )
+    client.post(
+        "/measurements",
+        json={**base, "timestamp": "2026-08-30T14:01:00Z", "raw_signal": 1.05, "estimated_value": 105.0},
+        headers=auth_headers,
+    )
 
     resp = client.get("/biomarkers/CH-01")
     assert resp.status_code == 200
@@ -198,7 +225,7 @@ def test_biomarker_trend_needs_enough_history_before_committing(client):
     assert missing.status_code == 404
 
 
-def test_biomarker_trend_and_anomaly_over_a_sustained_rise(client):
+def test_biomarker_trend_and_anomaly_over_a_sustained_rise(client, auth_headers):
     """Once there's enough history, a clean sustained rise is exactly what
     Phase 6's ChannelAnomalyDetector is meant to flag."""
     base = {
@@ -215,6 +242,7 @@ def test_biomarker_trend_and_anomaly_over_a_sustained_rise(client):
         client.post(
             "/measurements",
             json={**base, "timestamp": f"2026-08-30T14:00:0{i}Z", "raw_signal": 1.0, "estimated_value": value},
+            headers=auth_headers,
         )
 
     body = client.get("/biomarkers/CH-01").json()
@@ -228,7 +256,7 @@ def test_alerts_start_empty(client):
     assert client.get("/alerts").json() == []
 
 
-def test_stored_measurement_timestamp_round_trips_with_utc_offset(client):
+def test_stored_measurement_timestamp_round_trips_with_utc_offset(client, auth_headers):
     """Regression test: SQLite drops tzinfo on a datetime column, so a naive
     read-back must be re-tagged UTC (backend/app/crud.py: as_utc) -- otherwise
     the dashboard's `new Date(iso_string)` renders historical points shifted
@@ -242,6 +270,7 @@ def test_stored_measurement_timestamp_round_trips_with_utc_offset(client):
             "raw_signal": 1.0,
             "status": "valid",
         },
+        headers=auth_headers,
     )
     stored = client.get("/measurements", params={"device_id": "SB-800"}).json()[0]
     assert stored["timestamp"].endswith("+00:00") or stored["timestamp"].endswith("Z")
