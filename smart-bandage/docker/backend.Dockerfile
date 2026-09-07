@@ -18,6 +18,7 @@ COPY backend/ backend/
 COPY common/ common/
 COPY processing/ processing/
 COPY simulator/ simulator/
+COPY digital_twin/ digital_twin/
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000

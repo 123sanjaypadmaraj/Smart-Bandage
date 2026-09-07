@@ -16,9 +16,15 @@ from __future__ import annotations
 
 import math
 import random
+from typing import Optional
 
 
-def ou_step(prev: float, target_std: float, phi: float = 0.35) -> float:
+def ou_step(
+    prev: float,
+    target_std: float,
+    phi: float = 0.35,
+    rng: Optional[random.Random] = None,
+) -> float:
     """
     One tick of a mean-reverting noise process (a discretized
     Ornstein-Uhlenbeck / AR(1) process): `next = phi * prev + innovation`.
@@ -30,11 +36,17 @@ def ou_step(prev: float, target_std: float, phi: float = 0.35) -> float:
     the *stationary* standard deviation this process settles into, chosen
     so it stays a drop-in replacement for a plain `noise_std`; `phi`
     controls the memory (closer to 1 = smoother, slower-drifting noise).
+
+    `rng` draws the innovation from a caller-owned `random.Random` instead
+    of the global `random` module -- digital_twin/engine.py passes a
+    seeded one so a run is reproducible; every existing caller (unseeded)
+    keeps behaving exactly as before.
     """
     if target_std <= 0:
         return 0.0
     innovation_std = target_std * math.sqrt(max(1.0 - phi * phi, 1e-9))
-    return phi * prev + random.gauss(0.0, innovation_std)
+    source = rng if rng is not None else random
+    return phi * prev + source.gauss(0.0, innovation_std)
 
 
 def physiological_ripple(
