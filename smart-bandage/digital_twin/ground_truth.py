@@ -17,13 +17,13 @@ accessor, and this invariant (artifact: "What doesn't change") must hold
 for however many more digital-twin tickets land after this one. Only two
 callers are meant to exist: backend/app/simulation.py's dev-only "ground
 truth overlay" (gated behind `not settings.is_production`) and
-ml/evaluation/twin_backtest.py's offline scoring harness below. Both
-already reach into `DigitalTwinDevice.state` and duplicate this exact
-transfer function inline (see backend/app/simulation.py:
-_true_channel_signal) rather than share it -- that predates this module;
-consolidating the backend copy onto this one is a follow-up for whoever
-next touches backend/app/simulation.py, not done here to keep this ticket
-to new files only.
+ml/evaluation/twin_backtest.py's offline scoring harness below. Both read
+the clean transfer-function value through `DigitalTwinDevice.true_signal()`
+(digital_twin/observation.py) -- the single shared implementation of the
+formula, post digital-twin consolidation (DT-1/2/3/4/6/7) -- rather than
+duplicating it inline; this module used to carry its own duplicate
+(`true_channel_signal`) predating that consolidation, now removed in favor
+of the shared method.
 """
 from __future__ import annotations
 
@@ -31,23 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from digital_twin.observation import ChannelProfile, DigitalTwinDevice, get_channel_profile
-from digital_twin.state import WoundState
-
-
-def true_channel_signal(state: WoundState, profile: ChannelProfile) -> float:
-    """The clean value `profile` would report for hidden state `state` --
-    no noise, no electrode-fouling attenuation. Mirrors
-    digital_twin/observation.py:DigitalTwinDevice._observe_signal's linear
-    response term exactly, minus the two things that function adds on top
-    for a real (noisy, fouled) reading."""
-    return (
-        profile.baseline
-        + profile.inflammation_gain * state.inflammation
-        + profile.bacterial_load_gain * state.bacterial_load
-        + profile.moisture_gain * (state.moisture - 0.5)
-        + profile.perfusion_gain * (state.perfusion - 0.7)
-    )
+from digital_twin.observation import DigitalTwinDevice
 
 
 @dataclass(frozen=True)
@@ -83,7 +67,6 @@ def get_ground_truth(
     if channel_id not in device.channels:
         raise KeyError(f"unknown channel_id {channel_id!r} for device {device.device_id!r}")
     state = device.state
-    profile = get_channel_profile(device.channels[channel_id])
     return GroundTruth(
         device_id=device.device_id,
         channel_id=channel_id,
@@ -92,6 +75,6 @@ def get_ground_truth(
         bacterial_load=state.bacterial_load,
         moisture=state.moisture,
         perfusion=state.perfusion,
-        true_signal=round(true_channel_signal(state, profile), 4),
+        true_signal=round(device.true_signal(channel_id), 4),
         estimated_signal=estimated_signal,
     )

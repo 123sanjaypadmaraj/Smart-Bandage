@@ -7,48 +7,54 @@ tests/test_ml_phase6_backtest.py runs scenario_backtest.py -- see that
 harness's module docstring for why there's no trained model, and
 digital_twin/ground_truth.py's for why this accessor is deliberately kept
 off SensorInterface.
+
+The transfer-function formula itself (baseline + gains * state) is
+DigitalTwinDevice.true_signal()'s (digital_twin/observation.py) -- this
+module used to duplicate it as a standalone `true_channel_signal` helper;
+that's gone post digital-twin consolidation, so the formula is exercised
+here only through the shared method, not reimplemented in the test.
 """
 from __future__ import annotations
 
 import pytest
 
-from digital_twin.ground_truth import GroundTruth, get_ground_truth, true_channel_signal
-from digital_twin.observation import ChannelProfile, DigitalTwinDevice, get_channel_profile
+from digital_twin.ground_truth import GroundTruth, get_ground_truth
+from digital_twin.observation import DigitalTwinDevice, get_channel_profile
 from digital_twin.state import WoundState
 from ml.evaluation.twin_backtest import ONSET_THRESHOLD, TRAJECTORIES, run_twin_backtest
 
 
-def test_true_channel_signal_matches_linear_response_formula():
-    profile = ChannelProfile(
-        sensor_type="test",
-        baseline=100.0,
-        inflammation_gain=40.0,
-        bacterial_load_gain=60.0,
-        moisture_gain=5.0,
-        perfusion_gain=2.0,
+def test_true_signal_matches_linear_response_formula():
+    device = DigitalTwinDevice(
+        "SB-001",
+        channels={"CH-01": "test"},
+        state=WoundState(inflammation=0.2, bacterial_load=0.1, moisture=0.6, perfusion=0.8),
     )
-    state = WoundState(inflammation=0.2, bacterial_load=0.1, moisture=0.6, perfusion=0.8)
+    device.initialize()
+    profile = get_channel_profile("test")  # unregistered sensor_type -> _GENERIC_PROFILE
 
     expected = (
-        100.0
-        + 40.0 * 0.2
-        + 60.0 * 0.1
-        + 5.0 * (0.6 - 0.5)
-        + 2.0 * (0.8 - 0.7)
+        profile.baseline
+        + profile.inflammation_gain * 0.2
+        + profile.bacterial_load_gain * 0.1
+        + profile.moisture_gain * (0.6 - 0.5)
+        + profile.perfusion_gain * (0.8 - 0.7)
     )
-    assert true_channel_signal(state, profile) == pytest.approx(expected)
+    assert device.true_signal("CH-01") == pytest.approx(expected)
 
 
-def test_true_channel_signal_is_unaffected_by_moisture_and_perfusion_at_their_defaults():
+def test_true_signal_is_unaffected_by_moisture_and_perfusion_at_their_defaults():
     """WoundState()'s moisture/perfusion defaults (0.5, 0.7) are exactly
     each gain's zero point in the transfer function -- a fresh
     healthy_baseline twin's true signal should come entirely from
     baseline + its (small, nonzero) resting inflammation/bacterial_load,
     with no contribution from moisture or perfusion."""
+    device = DigitalTwinDevice("SB-001", channels={"CH-01": "pathogen_channel_1"})
+    device.initialize()
     profile = get_channel_profile("pathogen_channel_1")
-    state = WoundState()
+    state = device.state
     expected = profile.baseline + profile.inflammation_gain * state.inflammation + profile.bacterial_load_gain * state.bacterial_load
-    assert true_channel_signal(state, profile) == pytest.approx(expected)
+    assert device.true_signal("CH-01") == pytest.approx(expected)
 
 
 def test_get_ground_truth_reads_the_devices_current_state():
@@ -67,7 +73,7 @@ def test_get_ground_truth_reads_the_devices_current_state():
     assert gt.inflammation == pytest.approx(0.3)
     assert gt.bacterial_load == pytest.approx(0.2)
     assert gt.estimated_signal == pytest.approx(123.4)
-    assert gt.true_signal == pytest.approx(true_channel_signal(device.state, get_channel_profile("pathogen_channel_1")))
+    assert gt.true_signal == pytest.approx(device.true_signal("CH-01"))
 
 
 def test_get_ground_truth_rejects_unknown_channel():
