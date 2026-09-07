@@ -26,15 +26,18 @@ Claude for the link, or `Artifact(action: "list")` in this project).
 | — Containerization | Docker images + compose for backend/dashboard | ✅ done — `docker/`, `docker-compose.yml`; Postgres is now the default (`docker compose up --build`), matching what `ENVIRONMENT=production` actually requires — the old zero-dependency SQLite path moved to the standalone `docker-compose.sqlite.yml`. `docker-compose.tls.yml` overlay adds real HTTPS (nginx + uvicorn's built-in TLS) — verified end to end locally with a self-signed cert (`openssl req ... -subj "/CN=localhost"`): backend served `/health`/`/docs` over `:8443`, nginx served the dashboard over `:443`, and the plain-HTTP `:80`→`:443` redirect all worked. Still needs a real domain + CA-issued certificate (e.g. via `certbot`) for an actual public deploy — no such domain exists in this environment |
 | — Dev/ops scripts | seed data, DB reset, one-command dev startup, CI-equivalent checks, production secret generation | ✅ done — `scripts/` (`seed_demo_data.py`, `reset_db.py`, `dev_up.sh`, `run_checks.sh`, `generate_secret.py`), all run and verified |
 | 10 — AI analysis | Gemini-backed natural-language insight + chat, grounded in real device data | ✅ done — `backend/app/gemini_client.py` (transport, mockable), `processing/intelligence/ai_insight.py` (prompt building), `backend/app/routers/ai.py` (`GET`/`POST /devices/{id}/ai/{insight,chat}`); dashboard panel (`frontend/src/components/AIInsightPanel.tsx`) and mobile screen section (`mobile/src/screens/MonitorScreen.tsx`) both wired up. Opt-in: unset `GEMINI_API_KEY` returns a clean 503, nothing else in the app depends on it |
+| — Observability | Structured logging, a real health check, request/error metrics, optional error tracking | ✅ done — `backend/app/logging_config.py` (JSON logs), `GET /health` now checks DB reachability + whether `GEMINI_API_KEY` is set, `GET /metrics` (Prometheus format, `backend/app/metrics.py`), `backend/app/observability.py` (Sentry, opt-in via `SENTRY_DSN` the same way `GEMINI_API_KEY` is). `docker-compose.observability.yml` overlay adds Prometheus + Grafana. See `docs/observability.md` |
 
 Phases 1-6, 10, and the software half of 7-9 are exercised end to end by
-`pytest` (149 tests: schemas, the 7 simulator scenarios, the processing +
+`pytest` (159 tests: schemas, the 7 simulator scenarios, the processing +
 intelligence pipeline, the full FastAPI surface including the WebSocket
 loop and the Phase 10 AI endpoints (mocked Gemini transport, no network
 calls), the wire packet protocol, `RealSensor` against a fake transport,
-the calibration-fitting tooling against synthetic data, and the
-production-safety startup guard below) and were verified live in a browser
-against a running backend + dashboard. `.github/workflows/ci.yml` now runs
+the calibration-fitting tooling against synthetic data, the
+production-safety startup guard below, and the observability suite —
+`backend/tests/test_observability.py`, health/metrics/logging/the
+`SENTRY_DSN` opt-in) and were verified live in a browser against a
+running backend + dashboard. `.github/workflows/ci.yml` now runs
 the same pytest + frontend build + mobile typecheck on every push/PR —
 `scripts/run_checks.sh` is still the one-command local equivalent.
 
@@ -104,8 +107,10 @@ mobile/          React Native (Expo) counterpart to the dashboard — see mobile
 ml/              evaluation/scenario_backtest.py — Phase 6's "ML experiments",
                  scoped to a backtest against simulated ground truth; a trained
                  model waits on real labelled data (Blueprint §11)
-docs/            architecture notes, API spec, hardware notes, calibration notes
-docker/          backend.Dockerfile, frontend.Dockerfile, nginx.conf — see docker-compose.yml
+docs/            architecture notes, API spec, hardware notes, calibration notes,
+                 observability.md — logging/health/metrics/Sentry
+docker/          backend.Dockerfile, frontend.Dockerfile, nginx.conf — see docker-compose.yml;
+                 prometheus.yml, grafana-datasource.yml — see docker-compose.observability.yml
 scripts/         seed_demo_data.py, reset_db.py, dev_up.sh, run_checks.sh,
                  generate_secret.py
 tests/           cross-cutting tests (common/, simulator/, processing/, ml/)
@@ -223,6 +228,22 @@ you want open). `certs/` is git-ignored -- never commit a real key.
 Set `ENVIRONMENT=production` on the backend at the same time (see
 "Production readiness" above) so it also refuses dev-only defaults instead
 of just gaining a padlock icon.
+
+### Observability
+
+`GET /health` and `GET /metrics` work with zero config the moment the
+backend is up (structured JSON logs go to stdout unconditionally too).
+For a full Prometheus + Grafana stack, another overlay — combine it with
+whichever base file you're already running:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+Optional Sentry error tracking is opt-in via `SENTRY_DSN`, the same way
+`GEMINI_API_KEY` opts into Phase 10's AI analysis. Full details, the
+metrics table, and what's deliberately out of scope (log aggregation,
+alerting, tracing): see `docs/observability.md`.
 
 ### Convenience scripts
 

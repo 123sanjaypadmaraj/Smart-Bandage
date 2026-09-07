@@ -1,0 +1,13 @@
+# Auto-provisions Grafana's Prometheus datasource on container start (see
+# docker-compose.observability.yml) so there's no manual "add datasource"
+# click-through -- `prometheus` resolves via Compose DNS to the
+# `prometheus` service in that same overlay.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

@@ -1,0 +1,12 @@
+# Scrape config for docker-compose.observability.yml's `prometheus`
+# service. `backend` resolves via Docker Compose's built-in DNS to the
+# `backend` service in docker-compose.yml -- same hostname the frontend
+# container uses to reach it.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: smart-bandage-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]

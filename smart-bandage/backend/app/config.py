@@ -55,6 +55,17 @@ class Settings:
     gemini_api_key: str = os.environ.get("GEMINI_API_KEY", "")
     gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
+    # Observability (DISPATCH-7, see docs/observability.md).
+    # Structured JSON logging is always on (backend/app/logging_config.py) --
+    # LOG_LEVEL just tunes verbosity, nothing to opt into.
+    log_level: str = os.environ.get("LOG_LEVEL", "INFO")
+    # Error tracking (backend/app/observability.py). Same opt-in pattern as
+    # GEMINI_API_KEY above -- empty by default, sentry_sdk.init() is never
+    # called and never imported until SENTRY_DSN is set, so the app runs
+    # identically (and needs no Sentry account) with it unset.
+    sentry_dsn: str = os.environ.get("SENTRY_DSN", "")
+    sentry_traces_sample_rate: float = float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.0"))
+
     @property
     def is_production(self) -> bool:
         return self.environment.strip().lower() == "production"
