@@ -32,7 +32,11 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: pytest
-        run: pytest -v
+        # HYPOTHESIS_PROFILE=ci -> the deeper property-test search (see
+        # conftest.py, DT-7) instead of the fast "default" profile.
+        env:
+          HYPOTHESIS_PROFILE: ci
+        run: pytest -v --hypothesis-show-statistics
 
   frontend:
     name: frontend (tsc + vite build)

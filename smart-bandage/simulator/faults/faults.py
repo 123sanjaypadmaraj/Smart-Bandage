@@ -24,6 +24,7 @@ raised from a live link-quality value instead of a fixed cycle position.
 from __future__ import annotations
 
 import random
+from typing import Optional
 
 
 class SensorDisconnectedError(RuntimeError):
@@ -86,12 +87,13 @@ class ProbabilisticDropout:
         self.floor_quality = floor_quality
         self.max_drop_probability = max_drop_probability
 
-    def check(self, link_quality: float) -> None:
+    def check(self, link_quality: float, rng: Optional[random.Random] = None) -> None:
         if link_quality >= self.floor_quality:
             return
         deficit = (self.floor_quality - link_quality) / self.floor_quality
         drop_probability = min(self.max_drop_probability, deficit)
-        if random.random() < drop_probability:
+        generator = rng if rng is not None else random
+        if generator.random() < drop_probability:
             raise CommsTimeoutError(
                 f"no packet received (link quality {link_quality:.2f} below "
                 f"reliable floor {self.floor_quality:.2f})"

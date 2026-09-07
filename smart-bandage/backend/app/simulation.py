@@ -6,28 +6,29 @@ WS /ws/devices/{device_id}.
 
 DT-6 deliverable: a twin-backed mode alongside that, still behind the same
 three endpoints -- POST /simulation/start optionally names a patient
-profile (`_PATIENT_PROFILES` below), which seeds a
+profile (see digital_twin/profiles.py), which seeds a
 digital_twin.observation.DigitalTwinDevice in place of the usual
 MultiChannelSensor/ScenarioSensor. Everything downstream of "one raw
 reading per channel per tick" -- pipelines, alerts, WS broadcast shape --
 is unchanged; a caller that never passes `patient_profile` gets the exact
 scenario-backed behavior back.
 
-Deliberately NOT built against digital_twin/profiles.py's TwinProfile
-registry (DT-4) or digital_twin/patient_profile.py -- both were either
-broken or still shifting underneath concurrent work on this repo's other
-digital_twin/ modules as of this ticket. `_PATIENT_PROFILES` below is a
-small, self-contained stand-in scoped to this file; migrate it to a shared
-registry once digital_twin/profiles.py settles. Its only dependency on
-digital_twin/state.py's WoundState shape is isolated to
-`_true_channel_signal()` below -- if that shape changes, that's the one
-place to update.
+Consolidation note: this originally carried its own small, self-contained
+`_PATIENT_PROFILES` stand-in ("migrate it to a shared registry once
+digital_twin/profiles.py settles" -- see git history) because
+digital_twin/profiles.py's registry was still shifting underneath
+concurrent work on this repo's other digital_twin/ modules. It's settled
+now (one real WoundState, one registry with all six profiles -- the three
+static risk levels this file originally hardcoded plus DT-4's three
+scripted-onset scenarios), so `list_patient_profiles`/`get_patient_profile`
+below are now thin wrappers over it, kept as the stable names
+backend/app/routers/simulation.py already imports.
 """
 from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Optional, Union
 
@@ -40,8 +41,8 @@ from backend.app.ws_manager import manager
 from common.schemas.calibration import CalibrationParameters
 from common.schemas.device import DeviceStatus
 from common.schemas.measurement import RawMeasurement
-from digital_twin.observation import ChannelProfile, DigitalTwinDevice, get_channel_profile
-from digital_twin.state import WoundState
+from digital_twin.observation import DigitalTwinDevice
+from digital_twin.profiles import DEFAULT_PROFILE, TwinProfile, get_profile, list_profiles
 from processing.biomarkers.pipeline import ChannelPipeline
 from simulator.sensors.multi_channel_sensor import MultiChannelSensor
 
@@ -54,86 +55,23 @@ _IDENTITY_CALIBRATION = CalibrationParameters(
     valid_from=date(2020, 1, 1),
 )
 
-# DT-6: named starting points for a twin-backed simulation. Each is a
-# WoundState with its `*_target` fields set to match its initial values, so
-# the twin mean-reverts to its own baseline (see WoundState.step()) instead
-# of drifting back toward WoundState's own defaults -- otherwise a
-# "diabetic" run would look healthy again after a few minutes.
-_PATIENT_PROFILES: Dict[str, WoundState] = {
-    "healthy_baseline": WoundState(),
-    "diabetic_slow_healing": WoundState(
-        inflammation=0.35,
-        inflammation_target=0.35,
-        bacterial_load=0.4,
-        bacterial_load_target=0.4,
-        moisture=0.6,
-        moisture_target=0.6,
-        perfusion=0.5,
-        perfusion_target=0.5,
-    ),
-    "immunocompromised_high_risk": WoundState(
-        inflammation=0.6,
-        inflammation_target=0.6,
-        bacterial_load=0.75,
-        bacterial_load_target=0.75,
-        moisture=0.65,
-        moisture_target=0.65,
-        perfusion=0.4,
-        perfusion_target=0.4,
-    ),
-}
-DEFAULT_PATIENT_PROFILE = "healthy_baseline"
-
-_PATIENT_PROFILE_DESCRIPTIONS: Dict[str, str] = {
-    "healthy_baseline": "WoundState defaults -- low inflammation/bacterial load, well-perfused.",
-    "diabetic_slow_healing": "Elevated inflammation and bacterial load, reduced perfusion -- impaired local immune response.",
-    "immunocompromised_high_risk": "High inflammation and bacterial load, the most reduced perfusion -- least headroom before a serious infection.",
-}
-
-# digital_twin/observation.py's ChannelProfile registry is keyed by
-# sensor_type, not channel_id. "pathogen_channel_1" is the preset most
-# sensitive to inflammation/bacterial_load (see observation.py), the
-# natural default for a smart-bandage infection use case; a later ticket
-# can let a caller map specific channel_ids to specific sensor_types.
-_TWIN_SENSOR_TYPE = "pathogen_channel_1"
+DEFAULT_PATIENT_PROFILE = DEFAULT_PROFILE
 
 
 def list_patient_profiles() -> List[Dict[str, str]]:
     """name + description for every registered profile -- backs
     GET /simulation/patient-profiles, which lets the dashboard/mobile twin
     control panel populate its picker without hardcoding this registry."""
-    return [{"name": name, "description": _PATIENT_PROFILE_DESCRIPTIONS[name]} for name in sorted(_PATIENT_PROFILES)]
+    return [{"name": name, "description": get_profile(name).description} for name in list_profiles()]
 
 
-def get_patient_profile(name: str) -> WoundState:
-    """A fresh copy of the named profile's starting WoundState --
-    `dataclasses.replace` because WoundState is mutable (`.step()` mutates
-    in place) and this registry's entries must never be handed out shared,
-    or two simulations "started" from the same profile would silently
-    mutate each other's state."""
+def get_patient_profile(name: str) -> TwinProfile:
+    """The named digital_twin/profiles.py TwinProfile -- raises the same
+    shape of error `_PATIENT_PROFILES` used to for an unknown name."""
     try:
-        return replace(_PATIENT_PROFILES[name])
+        return get_profile(name)
     except KeyError as exc:
-        raise KeyError(f"unknown patient profile {name!r} -- choices are {sorted(_PATIENT_PROFILES)}") from exc
-
-
-def _true_channel_signal(state: WoundState, profile: ChannelProfile) -> float:
-    """The clean (no noise, no electrode fouling) value `profile` would
-    report for hidden state `state` -- the "ground truth" the dev-only
-    twin overlay compares a channel's actual (noisy, fouled) estimated
-    value against. Mirrors digital_twin/observation.py:
-    DigitalTwinDevice._observe_signal's linear response term exactly, minus
-    the fouling attenuation and noise it adds on top for the real reading.
-
-    Isolated here as the one place that reaches into WoundState's specific
-    fields -- see module docstring."""
-    return (
-        profile.baseline
-        + profile.inflammation_gain * state.inflammation
-        + profile.bacterial_load_gain * state.bacterial_load
-        + profile.moisture_gain * (state.moisture - 0.5)
-        + profile.perfusion_gain * (state.perfusion - 0.7)
-    )
+        raise KeyError(f"unknown patient profile {name!r} -- choices are {list_profiles()}") from exc
 
 
 @dataclass(frozen=True)
@@ -182,6 +120,8 @@ class DeviceSimulation:
         self.twin = twin
         self.sensor: Optional[MultiChannelSensor] = None
         self.twin_device: Optional[DigitalTwinDevice] = None
+        self._twin_profile: Optional[TwinProfile] = None
+        self._twin_elapsed_days = 0.0
         self._ground_truth_channel_id: Optional[str] = None
         self.last_ground_truth: Optional[TwinGroundTruthSnapshot] = None
         self._last_tick_time: Optional[float] = None
@@ -194,10 +134,11 @@ class DeviceSimulation:
                 raise ValueError(
                     f"twin_channel_id {twin.channel_id!r} is not among this device's channels {channel_ids!r}"
                 )
+            self._twin_profile = get_patient_profile(twin.patient_profile)
             self.twin_device = DigitalTwinDevice(
                 device_id,
-                channels={channel_id: _TWIN_SENSOR_TYPE for channel_id in channel_ids},
-                state=get_patient_profile(twin.patient_profile),
+                channels={channel_id: self._twin_profile.sensor_type for channel_id in channel_ids},
+                state=self._twin_profile.initial_state(),
             )
             self._ground_truth_channel_id = twin.channel_id or channel_ids[0]
             pipeline_channel_ids = channel_ids
@@ -236,7 +177,17 @@ class DeviceSimulation:
 
     def _read_all(self, dt_wall_seconds: float) -> Dict[str, Union[RawMeasurement, Exception]]:
         if self.twin_device is not None:
-            return self.twin_device.read_all(dt_seconds=dt_wall_seconds * self.twin.time_scale)
+            dt_seconds = dt_wall_seconds * self.twin.time_scale
+            # Apply this profile's scripted perturbations (infection onset,
+            # dressing disturbance -- digital_twin/perturbations.py) before
+            # advancing the state they retarget, same order
+            # digital_twin/profiles.py:simulate() uses for a backtest of the
+            # same profile, so a live run and a backtest agree.
+            for perturbation in self._twin_profile.perturbations:
+                perturbation.apply(self.twin_device.state, self._twin_elapsed_days)
+            results = self.twin_device.read_all(dt_seconds=dt_seconds)
+            self._twin_elapsed_days += dt_seconds / 86400.0
+            return results
         return self.sensor.read_all()
 
     def _channel_status(self, channel_id: str) -> DeviceStatus:
@@ -316,7 +267,7 @@ class DeviceSimulation:
     def _record_ground_truth(self, channel_id: str, estimated_signal: Optional[float]) -> None:
         assert self.twin_device is not None and self.twin is not None
         state = self.twin_device.state
-        true_signal = _true_channel_signal(state, get_channel_profile(_TWIN_SENSOR_TYPE))
+        true_signal = self.twin_device.true_signal(channel_id)
         self.last_ground_truth = TwinGroundTruthSnapshot(
             channel_id=channel_id,
             patient_profile=self.twin.patient_profile,
