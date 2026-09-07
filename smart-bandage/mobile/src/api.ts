@@ -2,7 +2,17 @@
  * Mirrors frontend/src/api.ts against the same Phase 4 backend contract.
  */
 import { API_BASE } from "./config";
-import type { AIChatReply, AIChatTurn, AIInsight, AlertItem, Device, DeviceStatus, MeasurementRecord } from "./types";
+import type {
+  AIChatReply,
+  AIChatTurn,
+  AIInsight,
+  AlertItem,
+  Device,
+  DeviceStatus,
+  MeasurementRecord,
+  PatientProfileInfo,
+  TwinGroundTruth,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -64,6 +74,37 @@ export const api = {
 
   alerts: (deviceId?: string) =>
     request<AlertItem[]>(`/alerts${deviceId ? `?${new URLSearchParams({ device_id: deviceId })}` : ""}`),
+
+  startSimulation: (
+    token: string,
+    body: {
+      device_id: string;
+      channels: string[];
+      scenario?: string;
+      duration?: number;
+      // DT-6: omit patient_profile for the ordinary scenario-backed run --
+      // see components/TwinControlPanel.tsx.
+      patient_profile?: string;
+      time_scale?: number;
+      twin_channel_id?: string;
+    },
+  ) => request<{ status: string; twin: boolean }>("/simulation/start", { method: "POST", body: JSON.stringify(body) }, token),
+
+  stopSimulation: (token: string, deviceId: string) =>
+    request<{ status: string }>(
+      `/simulation/stop?${new URLSearchParams({ device_id: deviceId })}`,
+      { method: "POST" },
+      token,
+    ),
+
+  // DT-6: twin-backed mode -- components/TwinControlPanel.tsx.
+  patientProfiles: () => request<PatientProfileInfo[]>("/simulation/patient-profiles"),
+
+  // Dev-only "ground truth overlay" -- 404s in production (see
+  // backend/app/routers/simulation.py) and whenever the device isn't
+  // twin-backed / hasn't ticked yet. Used as the panel's first paint,
+  // before the WS "twin_ground_truth" pushes take over.
+  twinGroundTruth: (deviceId: string) => request<TwinGroundTruth>(`/simulation/twin/${encodeURIComponent(deviceId)}`),
 
   // Phase 10: AI analysis -- mirrors frontend/src/api.ts.
   aiInsight: (token: string, deviceId: string) =>
