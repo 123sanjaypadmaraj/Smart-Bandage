@@ -1,0 +1,4 @@
+# Claude Code session/worktree scratch space -- worktrees under here are
+# full checkouts of other branches and must never be committed into
+# whichever branch happens to be checked out at the repo root.
+.claude/

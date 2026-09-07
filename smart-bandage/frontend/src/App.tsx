@@ -8,6 +8,7 @@ import { MeasurementChart } from "./components/MeasurementChart";
 import { RadialGauge } from "./components/RadialGauge";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
+import { TwinControlPanel } from "./components/TwinControlPanel";
 import { useDeviceSocket } from "./hooks/useDeviceSocket";
 import type { AlertItem, Device, DeviceStatus, MeasurementRecord } from "./types";
 
@@ -24,7 +25,14 @@ export default function App() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [sessionExpired, setSessionExpired] = useState(false);
 
-  const { connected: wsConnected, lastMeasurement, liveMeasurements, liveAlerts } = useDeviceSocket(selectedDeviceId);
+  const {
+    connected: wsConnected,
+    lastMeasurement,
+    liveMeasurements,
+    liveAlerts,
+    lastGroundTruth,
+    groundTruthHistory,
+  } = useDeviceSocket(selectedDeviceId);
 
   function handleLogin(newToken: string, newRefreshToken: string) {
     localStorage.setItem(TOKEN_KEY, newToken);
@@ -236,6 +244,13 @@ export default function App() {
             <div className="grid gap-6 lg:grid-cols-2">
               <AlertsPanel alerts={combinedAlerts} />
               <AIInsightPanel token={token} deviceId={selectedDevice.device_id} />
+              <TwinControlPanel
+                token={token}
+                deviceId={selectedDevice.device_id}
+                channels={selectedDevice.channels}
+                lastGroundTruth={lastGroundTruth}
+                groundTruthHistory={groundTruthHistory}
+              />
             </div>
           </>
         )}

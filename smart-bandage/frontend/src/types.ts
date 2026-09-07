@@ -75,9 +75,36 @@ export const SCENARIOS = [
 
 export type Scenario = (typeof SCENARIOS)[number];
 
+// DT-6: twin-backed simulation (backend/app/simulation.py's DigitalTwinDevice
+// integration) -- a patient profile plus a time-scale multiplier, instead
+// of a scenario script, driving one channel. The dashboard's twin control
+// panel (components/TwinControlPanel.tsx) is the only thing that reads
+// these; a device running the ordinary scenario-backed simulation never
+// produces them.
+
+export interface PatientProfileInfo {
+  name: string;
+  description: string;
+}
+
+export interface TwinGroundTruth {
+  device_id: string;
+  channel_id: string;
+  patient_profile: string;
+  time_scale: number;
+  inflammation: number;
+  bacterial_load: number;
+  moisture: number;
+  perfusion: number;
+  true_signal: number;
+  estimated_signal: number | null;
+  timestamp: string;
+}
+
 export type DeviceMessage =
   | { type: "measurement"; measurement: MeasurementRecord }
-  | { type: "alert"; alert: AlertItem };
+  | { type: "alert"; alert: AlertItem }
+  | { type: "twin_ground_truth"; ground_truth: TwinGroundTruth };
 
 // Phase 10: AI analysis (backend/app/schemas.py, backend/app/routers/ai.py)
 

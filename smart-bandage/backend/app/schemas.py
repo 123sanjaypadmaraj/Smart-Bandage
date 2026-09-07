@@ -77,12 +77,60 @@ class SimulationStartRequest(BaseModel):
     duration: Optional[float] = Field(None, ge=0, description="seconds; omit to run until /simulation/stop")
     noise: Optional[float] = Field(None, ge=0, description="stddev multiplier on the scenario's base noise")
     drift: Optional[float] = Field(None, description="per-second drift added to the scenario's base drift")
+    # DT-6: twin-backed mode (backend/app/simulation.py's DigitalTwinDevice
+    # integration). Omit patient_profile to get the existing scenario-only
+    # simulation unchanged -- these three fields are a no-op without it.
+    patient_profile: Optional[str] = Field(
+        None,
+        description="enables twin-backed mode: seeds a digital_twin.observation.DigitalTwinDevice from this named "
+        "patient profile (see GET /simulation/patient-profiles) instead of running the scenario script",
+        examples=["healthy_baseline", "diabetic_slow_healing", "immunocompromised_high_risk"],
+    )
+    time_scale: float = Field(
+        1.0,
+        gt=0,
+        description="twin-backed mode only: multiplies wall-clock seconds into physiological seconds fed to the "
+        "twin each tick -- 60 means one real second of simulation covers one minute of disease progression",
+    )
+    twin_channel_id: Optional[_WireId] = Field(
+        None, description="twin-backed mode only: which channel the twin drives; defaults to the first of `channels`"
+    )
 
 
 class SimulationScenarioRequest(BaseModel):
     device_id: _WireId
     scenario: str = Field(..., examples=["normal", "rising_concentration", "electrode_degradation"])
     channel_id: Optional[_WireId] = Field(None, description="omit to apply to every channel on the device")
+
+
+class PatientProfileInfo(BaseModel):
+    """GET /simulation/patient-profiles -- lets the dashboard/mobile twin
+    control panel populate its picker without hardcoding the registry."""
+
+    name: str
+    description: str
+
+
+class TwinGroundTruth(BaseModel):
+    """GET /simulation/twin/{device_id} -- dev-only "ground truth overlay"
+    data (backend/app/config.py Settings.is_production gates this off in
+    production, same as the seeded dev login): the hidden WoundState the
+    twin actually integrated, next to the clean/true and actual/estimated
+    values for one channel, so the dashboard/mobile panel can plot both."""
+
+    device_id: _WireId
+    channel_id: _WireId
+    patient_profile: str
+    time_scale: float
+    inflammation: float
+    bacterial_load: float
+    moisture: float
+    perfusion: float
+    true_signal: float = Field(..., description="the clean value this channel would report with no noise/fouling")
+    estimated_signal: Optional[float] = Field(
+        None, description="the channel's actual (noisy, fouled) reported estimated_value"
+    )
+    timestamp: datetime
 
 
 class BiomarkerWithTrend(BaseModel):
