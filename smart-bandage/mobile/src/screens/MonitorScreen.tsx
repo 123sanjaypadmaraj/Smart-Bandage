@@ -18,7 +18,7 @@ interface Props {
  * information a phone screen has room to show. */
 export function MonitorScreen({ token, deviceId, channels, onBack }: Props) {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
-  const { connected, lastMeasurement, liveAlerts, lastGroundTruth } = useDeviceSocket(deviceId);
+  const { connected, lastMeasurement, liveAlerts, lastGroundTruth, groundTruthHistory } = useDeviceSocket(deviceId);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,7 +121,13 @@ export function MonitorScreen({ token, deviceId, channels, onBack }: Props) {
       )}
 
       <ScrollView style={{ flex: 1 }}>
-        <TwinControlPanel token={token} deviceId={deviceId} channels={channels} lastGroundTruth={lastGroundTruth} />
+        <TwinControlPanel
+          token={token}
+          deviceId={deviceId}
+          channels={channels}
+          lastGroundTruth={lastGroundTruth}
+          groundTruthHistory={groundTruthHistory}
+        />
 
         <Text style={styles.sectionTitle}>Alerts</Text>
         {liveAlerts.length === 0 && <Text style={styles.empty}>No active alerts.</Text>}

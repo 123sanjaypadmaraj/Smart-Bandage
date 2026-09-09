@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { api, ApiError } from "../api";
 import type { PatientProfileInfo, TwinGroundTruth } from "../types";
+import { Sparkline } from "./Sparkline";
 
 interface Props {
   token: string;
@@ -11,6 +12,7 @@ interface Props {
    * the backend never broadcasts it in production; see
    * backend/app/routers/simulation.py). */
   lastGroundTruth: TwinGroundTruth | null;
+  groundTruthHistory: TwinGroundTruth[];
 }
 
 // WoundState's plausible range for each variable (digital_twin/state.py) --
@@ -35,14 +37,17 @@ const STATE_LABELS: Record<keyof typeof STATE_RANGE, string> = {
  * simulation mode (backend/app/simulation.py's DigitalTwinDevice), plus a
  * dev-only "ground truth overlay" comparing the hidden physiological state
  * it's actually integrating against what the (noisy, fouled) channel
- * reports for it. Mirrors the dashboard's TwinControlPanel.tsx: no chart
- * library and no third-party UI kit on mobile (see MonitorScreen's
- * comment / this app's dependency list), so profile selection is a row of
- * Pressable chips instead of a <select>, and the overlay is numbers + bars
- * instead of a sparkline pair. __DEV__ is Expo/React Native's build-mode
- * flag, the RN equivalent of Vite's import.meta.env.DEV.
+ * reports for it. Mirrors the dashboard's TwinControlPanel.tsx, minus the
+ * chart library / third-party UI kit this app carries none of (see
+ * MonitorScreen's comment / this app's dependency list): profile selection
+ * is a row of Pressable chips instead of a <select>, the state bars are
+ * plain Views instead of SVG rects, and the estimated/true trend pair is a
+ * Sparkline built from flex-height bars rather than a stroked SVG path (RN
+ * has no <svg>) -- but it is a real trend graph, same as the dashboard's.
+ * __DEV__ is Expo/React Native's build-mode flag, the RN equivalent of
+ * Vite's import.meta.env.DEV.
  */
-export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth }: Props) {
+export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, groundTruthHistory }: Props) {
   const [profiles, setProfiles] = useState<PatientProfileInfo[]>([]);
   const [patientProfile, setPatientProfile] = useState<string>("");
   const [timeScale, setTimeScale] = useState("60");
@@ -96,6 +101,8 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth }:
     });
 
   const activeProfile = profiles.find((p) => p.name === patientProfile);
+  const trueHistory = groundTruthHistory.map((g) => g.true_signal);
+  const estimatedHistory = groundTruthHistory.map((g) => g.estimated_signal ?? g.true_signal);
 
   return (
     <View style={styles.card}>
@@ -157,12 +164,18 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth }:
           ) : (
             <View>
               <View style={styles.compareRow}>
-                <Text style={styles.compareLabel}>Estimated vs true</Text>
-                <Text style={styles.compareValue}>
-                  <Text style={styles.estimated}>{lastGroundTruth.estimated_signal?.toFixed(2) ?? "--"}</Text>
-                  <Text style={styles.compareSlash}> / </Text>
-                  <Text style={styles.trueValue}>{lastGroundTruth.true_signal.toFixed(2)}</Text>
-                </Text>
+                <View>
+                  <Text style={styles.compareLabel}>Estimated vs true</Text>
+                  <Text style={styles.compareValue}>
+                    <Text style={styles.estimated}>{lastGroundTruth.estimated_signal?.toFixed(2) ?? "--"}</Text>
+                    <Text style={styles.compareSlash}> / </Text>
+                    <Text style={styles.trueValue}>{lastGroundTruth.true_signal.toFixed(2)}</Text>
+                  </Text>
+                </View>
+                <View style={styles.sparklines}>
+                  <Sparkline values={estimatedHistory} color="#fbbf24" />
+                  <Sparkline values={trueHistory} color="#34d399" />
+                </View>
               </View>
 
               {(Object.keys(STATE_RANGE) as (keyof typeof STATE_RANGE)[]).map((key) => {
@@ -241,6 +254,7 @@ const styles = StyleSheet.create({
   },
   compareLabel: { color: "#64748b", fontSize: 10, textTransform: "uppercase" },
   compareValue: { fontSize: 15, fontVariant: ["tabular-nums"] },
+  sparklines: { flexDirection: "row", gap: 6 },
   estimated: { color: "#fbbf24" },
   compareSlash: { color: "#475569" },
   trueValue: { color: "#34d399" },
