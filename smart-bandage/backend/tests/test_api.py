@@ -44,7 +44,12 @@ def auth_headers(client):
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "checks": {"database": "ok", "gemini_configured": False},
+    }
 
 
 def test_login_rejects_bad_password(client):
