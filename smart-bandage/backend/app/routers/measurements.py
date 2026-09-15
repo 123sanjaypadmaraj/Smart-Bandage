@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.app import crud
 from backend.app.database import get_db
+from backend.app.security import get_current_username
 from common.schemas.measurement import MeasurementRecord
 
 router = APIRouter(prefix="/measurements", tags=["measurements"])
@@ -27,10 +28,23 @@ def query_measurements(
 
 
 @router.post("", response_model=MeasurementRecord, status_code=201)
-def ingest_measurement(record: MeasurementRecord, db: Session = Depends(get_db)) -> MeasurementRecord:
+def ingest_measurement(
+    record: MeasurementRecord,
+    db: Session = Depends(get_db),
+    _user: str = Depends(get_current_username),
+) -> MeasurementRecord:
     """Ingest one already-processed measurement -- from a BLE gateway or CSV
     import that ran its own pipeline. The simulator ingests through
-    backend/app/simulation.py directly, reusing processing/ in-process."""
+    backend/app/simulation.py directly, reusing processing/ in-process.
+
+    Gated behind the same user JWT login as the rest of the authenticated
+    API (see get_current_username) -- not a real per-device credential.
+    Anyone who can sign in can post data for any device_id; there's no
+    device-level auth model yet. That's a known, documented gap (see
+    docs/security.md), not a full fix -- but it closes off unauthenticated
+    data injection, which is strictly worse than "any logged-in user can
+    write for any device."
+    """
     row = crud.store_measurement(db, record)
     return crud.measurement_to_schema(row)
 
