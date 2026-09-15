@@ -41,7 +41,7 @@ from backend.app.ws_manager import manager
 from common.schemas.calibration import CalibrationParameters
 from common.schemas.device import DeviceStatus
 from common.schemas.measurement import RawMeasurement
-from digital_twin.observation import DigitalTwinDevice
+from digital_twin.observation import DigitalTwinDevice, get_channel_profile
 from digital_twin.profiles import DEFAULT_PROFILE, TwinProfile, get_profile, list_profiles
 from processing.biomarkers.pipeline import ChannelPipeline
 from simulator.sensors.multi_channel_sensor import MultiChannelSensor
@@ -56,6 +56,42 @@ _IDENTITY_CALIBRATION = CalibrationParameters(
 )
 
 DEFAULT_PATIENT_PROFILE = DEFAULT_PROFILE
+
+# The channel-type rotation a twin-backed device's *extra* channels get --
+# a real multi-channel bandage has electrodes for different analytes, not
+# three copies of the same one. The profile's own sensor_type always wins
+# the first (and, for a single-channel device, only) slot, since that's
+# what GET /simulation/twin/{device_id}'s ground-truth overlay defaults to
+# and what digital_twin/profiles.py designed each profile's narrative
+# around; channels beyond that cycle through the rest of this list so a
+# 3-channel device reads as pathogen + pH + glucose, not one assay in
+# triplicate.
+_CHANNEL_TYPE_ROTATION = ("pathogen_channel_1", "pH", "glucose")
+
+
+def _assign_channel_sensor_types(channel_ids: List[str], primary_sensor_type: str) -> Dict[str, str]:
+    others = [t for t in _CHANNEL_TYPE_ROTATION if t != primary_sensor_type]
+    rotation = [primary_sensor_type, *others] or [primary_sensor_type]
+    return {
+        channel_id: rotation[i % len(rotation)] for i, channel_id in enumerate(channel_ids)
+    }
+
+
+def _twin_pipeline(sensor_type: str) -> ChannelPipeline:
+    """A calibrated `ChannelPipeline` for one twin-backed channel, built
+    from that sensor_type's `digital_twin.observation.ChannelProfile` --
+    real units/ranges (see that module) instead of the scenario-backed
+    path's identity calibration."""
+    profile = get_channel_profile(sensor_type)
+    calibration = CalibrationParameters(
+        sensor_type=sensor_type,
+        version="digital-twin-sim-1.0",
+        model_type="linear",
+        slope=profile.cal_slope,
+        intercept=profile.cal_intercept,
+        valid_from=date(2020, 1, 1),
+    )
+    return ChannelPipeline(calibration=calibration, unit=profile.unit)
 
 
 def list_patient_profiles() -> List[Dict[str, str]]:
@@ -125,6 +161,7 @@ class DeviceSimulation:
         self._ground_truth_channel_id: Optional[str] = None
         self.last_ground_truth: Optional[TwinGroundTruthSnapshot] = None
         self._last_tick_time: Optional[float] = None
+        self.pipelines: Dict[str, ChannelPipeline]
 
         channel_ids = list(channel_ids)
         if twin is not None:
@@ -135,21 +172,23 @@ class DeviceSimulation:
                     f"twin_channel_id {twin.channel_id!r} is not among this device's channels {channel_ids!r}"
                 )
             self._twin_profile = get_patient_profile(twin.patient_profile)
+            channel_sensor_types = _assign_channel_sensor_types(channel_ids, self._twin_profile.sensor_type)
             self.twin_device = DigitalTwinDevice(
                 device_id,
-                channels={channel_id: self._twin_profile.sensor_type for channel_id in channel_ids},
+                channels=channel_sensor_types,
                 state=self._twin_profile.initial_state(),
             )
             self._ground_truth_channel_id = twin.channel_id or channel_ids[0]
-            pipeline_channel_ids = channel_ids
+            self.pipelines = {
+                channel_id: _twin_pipeline(sensor_type)
+                for channel_id, sensor_type in channel_sensor_types.items()
+            }
         else:
             self.sensor = MultiChannelSensor(device_id, channel_ids, default_scenario=scenario)
-            pipeline_channel_ids = list(self.sensor.channels)
-
-        self.pipelines: Dict[str, ChannelPipeline] = {
-            channel_id: ChannelPipeline(calibration=_IDENTITY_CALIBRATION, unit="a.u.")
-            for channel_id in pipeline_channel_ids
-        }
+            self.pipelines = {
+                channel_id: ChannelPipeline(calibration=_IDENTITY_CALIBRATION, unit="a.u.")
+                for channel_id in self.sensor.channels
+            }
         self.intelligence = IntelligenceEngine()
         self.task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()

@@ -63,6 +63,22 @@ class ChannelProfile:
     for the two variables whose plausible range runs that high) of the
     corresponding WoundState variable is worth for this channel; a channel
     left at 0.0 for a variable simply doesn't respond to it.
+
+    `unit`/`cal_slope`/`cal_intercept` are this sensor_type's calibration
+    curve -- `estimated_value = cal_slope * raw_signal + cal_intercept`,
+    the same linear form `common/schemas/calibration.py:CalibrationParameters`
+    uses. Chosen so a healthy WoundState's raw_signal lands near the low end
+    of a literature-plausible range for that analyte and a severe one lands
+    near the high end (see each preset's comment for the numbers and
+    source reasoning) -- not fit to any real electrode, since none exists
+    yet (same caveat as processing/calibration/experimental.py's synthetic
+    ground truth). Without this, `backend/app/simulation.py` fell back to
+    an identity calibration and `unit="a.u."` for every twin-backed
+    channel, so the dashboard showed e.g. a "pH" channel reading "104.3"
+    with no unit -- a number that can't come off a real bandage. A channel
+    left at the default (0.0, "a.u.") -- `_GENERIC_PROFILE` below -- keeps
+    that old identity behavior, which is still correct for an
+    electrode/assay this module doesn't know about yet.
     """
 
     sensor_type: str
@@ -72,6 +88,9 @@ class ChannelProfile:
     moisture_gain: float = 0.0
     perfusion_gain: float = 0.0
     noise_std: float = 1.5
+    unit: str = "a.u."
+    cal_slope: float = 1.0
+    cal_intercept: float = 0.0
 
 
 # Presets for the sensor_type examples already documented in
@@ -81,6 +100,11 @@ class ChannelProfile:
 # falls back to _GENERIC_PROFILE below rather than raising, unlike
 # simulator/scenarios.py:get_scenario's closed set of 7 named scenarios.
 _CHANNEL_PROFILES: dict[str, ChannelProfile] = {
+    # CRP-like inflammatory marker. true_response spans ~107 (WoundState
+    # defaults) to ~251 (inflammation/bacterial_load near their 1.5 max) --
+    # calibrated so that maps to ~3 mg/L (normal serum CRP is <10 mg/L) up
+    # to ~180 mg/L (bacterial infection commonly pushes CRP well past
+    # 100 mg/L).
     "pathogen_channel_1": ChannelProfile(
         sensor_type="pathogen_channel_1",
         baseline=100.0,
@@ -88,7 +112,19 @@ _CHANNEL_PROFILES: dict[str, ChannelProfile] = {
         bacterial_load_gain=60.0,
         moisture_gain=5.0,
         noise_std=1.5,
+        unit="mg/L",
+        cal_slope=1.229,
+        cal_intercept=-128.5,
     ),
+    # Wound-fluid glucose. This profile's gains (inflammation/perfusion, no
+    # bacterial_load term) model the vascular-permeability mechanism -- more
+    # exudate glucose reaching the wound bed as local inflammation rises --
+    # rather than the bacterial-consumption mechanism that can push glucose
+    # the other way in a heavily colonized wound; both are real, the
+    # literature doesn't agree on which dominates, and this channel's raw
+    # response was designed (DT-2) around the former. true_response spans
+    # ~91 to ~105 across the WoundState range; calibrated to ~95 mg/dL
+    # (normal, comparable to serum) up to ~115 mg/dL (mildly elevated).
     "glucose": ChannelProfile(
         sensor_type="glucose",
         baseline=90.0,
@@ -96,7 +132,14 @@ _CHANNEL_PROFILES: dict[str, ChannelProfile] = {
         moisture_gain=8.0,
         perfusion_gain=6.0,
         noise_std=1.2,
+        unit="mg/dL",
+        cal_slope=1.4286,
+        cal_intercept=-35.0,
     ),
+    # Wound-bed pH. true_response spans ~103 to ~155; calibrated so that
+    # maps to ~5.5 (healthy granulating wounds trend acidic, roughly 4-6)
+    # up to ~8.5 (chronic/infected wounds trend alkaline, commonly cited
+    # around 7.5-8.9).
     "pH": ChannelProfile(
         sensor_type="pH",
         baseline=100.0,
@@ -104,6 +147,9 @@ _CHANNEL_PROFILES: dict[str, ChannelProfile] = {
         bacterial_load_gain=25.0,
         moisture_gain=10.0,
         noise_std=1.0,
+        unit="pH",
+        cal_slope=0.05797,
+        cal_intercept=-0.457,
     ),
 }
 

@@ -22,11 +22,28 @@ def test_unknown_sensor_type_falls_back_to_generic_profile():
     profile = get_channel_profile("some_future_assay")
     assert profile.sensor_type == "generic"
     assert profile.inflammation_gain == 0.0
+    assert profile.unit == "a.u."  # no calibration curve for an assay this module doesn't know
 
 
 def test_known_sensor_type_returns_its_preset():
     assert get_channel_profile("pathogen_channel_1").bacterial_load_gain > 0
     assert get_channel_profile("glucose").sensor_type == "glucose"
+
+
+def test_known_sensor_types_have_a_real_calibration_curve():
+    """Every named preset maps raw_signal to a physiologically-labeled unit
+    -- not the "a.u." identity fallback -- so a dashboard showing this
+    channel's estimated_value/unit combination is showing something a real
+    bandage reading could plausibly be (see backend/app/simulation.py's
+    _twin_pipeline, which applies this curve for twin-backed simulations)."""
+    for sensor_type, expected_unit in [
+        ("pathogen_channel_1", "mg/L"),
+        ("glucose", "mg/dL"),
+        ("pH", "pH"),
+    ]:
+        profile = get_channel_profile(sensor_type)
+        assert profile.unit == expected_unit
+        assert profile.cal_slope != 1.0 or profile.cal_intercept != 0.0  # not the identity fallback
 
 
 def test_shared_wound_state_correlates_two_channels():

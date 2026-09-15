@@ -460,6 +460,40 @@ def test_twin_backed_simulation_produces_measurements_and_ground_truth(client, a
         client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
 
 
+def test_twin_backed_simulation_reports_real_units_not_arbitrary_units(client, auth_headers):
+    """A twin-backed channel's estimated_value/unit should read like
+    something a real bandage electrode could report (e.g. "6.8 mg/L") --
+    not the scenario-backed path's identity calibration / "a.u." -- and a
+    multi-channel device should get distinct sensor types (pathogen/pH/
+    glucose), not the same assay cloned across every channel. See
+    backend/app/simulation.py's _twin_pipeline / _assign_channel_sensor_types."""
+    device_id = "SB-810"
+    start = client.post(
+        "/simulation/start",
+        json={
+            "device_id": device_id,
+            "channels": ["CH-01", "CH-02", "CH-03"],
+            "patient_profile": "immunocompromised_high_risk",
+            "time_scale": 200.0,
+        },
+        headers=auth_headers,
+    )
+    assert start.status_code == 202, start.text
+
+    try:
+        deadline = time.monotonic() + 3.0
+        units_seen: set[str] = set()
+        while time.monotonic() < deadline and len(units_seen) < 3:
+            measurements = client.get("/measurements", params={"device_id": device_id}).json()
+            units_seen = {m["unit"] for m in measurements if m.get("unit") is not None}
+            if len(units_seen) < 3:
+                time.sleep(0.1)
+        assert "a.u." not in units_seen
+        assert units_seen == {"mg/L", "pH", "mg/dL"}
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
 def test_twin_backed_simulation_rejects_scenario_injection(client, auth_headers):
     device_id = "SB-801"
     client.post(
