@@ -14,7 +14,9 @@ if [ -f "$VENV_ACTIVATE" ]; then
 fi
 
 echo "== backend: pytest =="
-pytest
+# HYPOTHESIS_PROFILE=ci -> the deeper property-test search (see conftest.py,
+# DT-7) instead of the fast "default" profile a bare local `pytest` gets.
+HYPOTHESIS_PROFILE=ci pytest --hypothesis-show-statistics
 
 echo
 echo "== frontend: tsc + vite build =="

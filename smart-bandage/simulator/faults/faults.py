@@ -12,8 +12,19 @@ or the device stops responding. `ScenarioSensor.read_measurement()` lets
 these propagate; callers (the ingestion pipeline, the backend) are expected
 to catch them and record status="error", same as they would for a real
 dropped BLE packet.
+
+DisconnectAfter and CommsDropoutCycle (below) decide *when* to raise from a
+scripted read index -- right for a scenario with a fixed script, but not
+for digital_twin/observation.py (DT-2), where BLE link quality is a running
+process (digital_twin/device_physics.py:LinkQualityProcess) that can wander
+down and recover on its own. ProbabilisticDropout and SustainedDisconnect
+below are the continuous-condition analogues: same two exception shapes,
+raised from a live link-quality value instead of a fixed cycle position.
 """
 from __future__ import annotations
+
+import random
+from typing import Optional
 
 
 class SensorDisconnectedError(RuntimeError):
@@ -58,6 +69,63 @@ class CommsDropoutCycle:
         if position >= self.ok_count:
             raise CommsTimeoutError(
                 f"no packet received (dropout window, position {position - self.ok_count + 1}/{self.drop_count})"
+            )
+
+
+class ProbabilisticDropout:
+    """Continuous-probability packet loss, driven by a live link-quality
+    value in [0, 1] (DT-2: BLE link quality as a running process) rather
+    than a scripted index cycle. Below `floor_quality` the drop probability
+    rises linearly with the deficit, capped at `max_drop_probability`; at
+    or above the floor, reads are always delivered. Reuses
+    CommsTimeoutError -- the same failure shape a caller already knows how
+    to handle from CommsDropoutCycle -- so this is a drop-in alternative
+    trigger, not a new fault type.
+    """
+
+    def __init__(self, floor_quality: float = 0.5, max_drop_probability: float = 0.9) -> None:
+        self.floor_quality = floor_quality
+        self.max_drop_probability = max_drop_probability
+
+    def check(self, link_quality: float, rng: Optional[random.Random] = None) -> None:
+        if link_quality >= self.floor_quality:
+            return
+        deficit = (self.floor_quality - link_quality) / self.floor_quality
+        drop_probability = min(self.max_drop_probability, deficit)
+        generator = rng if rng is not None else random
+        if generator.random() < drop_probability:
+            raise CommsTimeoutError(
+                f"no packet received (link quality {link_quality:.2f} below "
+                f"reliable floor {self.floor_quality:.2f})"
+            )
+
+
+class SustainedDisconnect:
+    """Raises SensorDisconnectedError once link quality has stayed below
+    `floor_quality` for `sustained_reads` consecutive reads, and then keeps
+    raising it on every later check -- matching DisconnectAfter's "stays
+    disconnected" behavior (Blueprint scenario 6), but the continuous
+    analogue: a sustained *condition* trips it, not a fixed read count.
+    """
+
+    def __init__(self, floor_quality: float = 0.15, sustained_reads: int = 5) -> None:
+        self.floor_quality = floor_quality
+        self.sustained_reads = sustained_reads
+        self._consecutive_bad = 0
+        self._tripped = False
+
+    def check(self, link_quality: float) -> None:
+        if self._tripped:
+            raise SensorDisconnectedError("device stopped responding (sustained link failure)")
+        if link_quality < self.floor_quality:
+            self._consecutive_bad += 1
+        else:
+            self._consecutive_bad = 0
+        if self._consecutive_bad >= self.sustained_reads:
+            self._tripped = True
+            raise SensorDisconnectedError(
+                f"link quality below {self.floor_quality:.2f} for "
+                f"{self._consecutive_bad} consecutive reads"
             )
 
 

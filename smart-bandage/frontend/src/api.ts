@@ -1,4 +1,14 @@
-import type { AIChatReply, AIChatTurn, AIInsight, AlertItem, Device, DeviceStatus, MeasurementRecord } from "./types";
+import type {
+  AIChatReply,
+  AIChatTurn,
+  AIInsight,
+  AlertItem,
+  Device,
+  DeviceStatus,
+  MeasurementRecord,
+  PatientProfileInfo,
+  TwinGroundTruth,
+} from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 export const WS_BASE = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
@@ -106,8 +116,18 @@ export const api = {
 
   startSimulation: (
     token: string,
-    body: { device_id: string; channels: string[]; scenario: string; duration?: number },
-  ) => request<{ status: string }>("/simulation/start", { method: "POST", body: JSON.stringify(body) }, token),
+    body: {
+      device_id: string;
+      channels: string[];
+      scenario?: string;
+      duration?: number;
+      // DT-6: omit patient_profile for the ordinary scenario-backed run --
+      // see components/TwinControlPanel.tsx.
+      patient_profile?: string;
+      time_scale?: number;
+      twin_channel_id?: string;
+    },
+  ) => request<{ status: string; twin: boolean }>("/simulation/start", { method: "POST", body: JSON.stringify(body) }, token),
 
   stopSimulation: (token: string, deviceId: string) =>
     request<{ status: string }>(
@@ -118,6 +138,15 @@ export const api = {
 
   setScenario: (token: string, body: { device_id: string; scenario: string; channel_id?: string }) =>
     request<{ status: string }>("/simulation/scenario", { method: "POST", body: JSON.stringify(body) }, token),
+
+  // DT-6: twin-backed mode -- components/TwinControlPanel.tsx.
+  patientProfiles: () => request<PatientProfileInfo[]>("/simulation/patient-profiles"),
+
+  // Dev-only "ground truth overlay" -- 404s in production (see
+  // backend/app/routers/simulation.py) and whenever the device isn't
+  // twin-backed / hasn't ticked yet. Used as the panel's first paint,
+  // before the WS "twin_ground_truth" pushes take over.
+  twinGroundTruth: (deviceId: string) => request<TwinGroundTruth>(`/simulation/twin/${encodeURIComponent(deviceId)}`),
 
   // Phase 10: AI analysis -- both require auth; a 503 means GEMINI_API_KEY
   // isn't set on the backend, a 404 means the device has no readings yet.
