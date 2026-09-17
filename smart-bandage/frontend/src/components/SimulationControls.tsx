@@ -84,7 +84,7 @@ export function SimulationControls({ token, deviceId, channels, compact = false 
     <button
       onClick={start}
       disabled={busy}
-      className={`rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 py-1.5 text-xs font-medium text-[#16233f] shadow-[0_4px_16px_rgba(245,158,11,0.25)] transition hover:brightness-105 disabled:opacity-50 ${compact ? "w-full" : "px-3.5"}`}
+      className={`rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 py-1.5 text-xs font-medium text-[#0a0a0d] shadow-[0_4px_16px_rgba(249,115,22,0.25)] transition hover:brightness-105 disabled:opacity-50 ${compact ? "w-full" : "px-3.5"}`}
     >
       Start
     </button>

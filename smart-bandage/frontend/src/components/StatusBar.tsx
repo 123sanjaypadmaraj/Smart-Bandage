@@ -28,7 +28,7 @@ const TONE_STYLES: Record<Tone, { text: string; ring: string; glow: string; icon
     ring: "border-amber-400/30 dark:border-amber-400/20",
     glow: "shadow-[0_0_24px_-8px_rgba(251,191,36,0.4)]",
     iconBg: "bg-amber-400/10 text-amber-600 dark:text-amber-300",
-    line: "#f59e0b",
+    line: "#f97316",
   },
   bad: {
     text: "text-rose-600 dark:text-rose-300",
@@ -42,7 +42,7 @@ const TONE_STYLES: Record<Tone, { text: string; ring: string; glow: string; icon
     ring: "border-slate-200 dark:border-white/10",
     glow: "",
     iconBg: "bg-slate-100 text-slate-500 dark:bg-white/[0.06] dark:text-slate-400",
-    line: "#94a3b8",
+    line: "#a1a1aa",
   },
 };
 

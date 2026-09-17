@@ -21,7 +21,7 @@ const ALERT_TYPE_INFO: Record<AlertItem["type"], string> = {
 };
 
 const SEVERITY_STYLE: Record<AlertItem["severity"], string> = {
-  info: "border-[#16233f]/20 border-l-[3px] border-l-[#16233f]/50 bg-[#16233f]/[0.05] text-[#16233f] dark:border-blue-800/50 dark:border-l-blue-400/60 dark:bg-blue-950/30 dark:text-blue-300",
+  info: "border-indigo-300 border-l-[3px] border-l-indigo-600 bg-indigo-50 text-indigo-700 dark:border-indigo-800/50 dark:border-l-indigo-400/60 dark:bg-indigo-950/30 dark:text-indigo-300",
   warning:
     "border-amber-400/40 border-l-[3px] border-l-amber-500 bg-amber-50 text-amber-700 dark:border-amber-800/50 dark:border-l-amber-400 dark:bg-amber-950/30 dark:text-amber-300",
   critical:
@@ -29,7 +29,7 @@ const SEVERITY_STYLE: Record<AlertItem["severity"], string> = {
 };
 
 const SEVERITY_DOT: Record<AlertItem["severity"], string> = {
-  info: "bg-[#16233f] dark:bg-blue-400",
+  info: "bg-indigo-600 dark:bg-indigo-400",
   warning: "bg-amber-500 dark:bg-amber-400",
   critical: "bg-rose-500 shadow-[0_0_6px_2px_rgba(244,63,94,0.5)] dark:bg-rose-400",
 };

@@ -155,7 +155,7 @@ export default function App() {
     return parts.reduce((a, b) => a + b, 0) / parts.length;
   }, [status]);
 
-  const healthColor = healthScore === null ? "#94a3b8" : healthScore < 0.5 ? "#f43f5e" : healthScore < 0.8 ? "#f59e0b" : "#10b981";
+  const healthColor = healthScore === null ? "#a1a1aa" : healthScore < 0.5 ? "#f43f5e" : healthScore < 0.8 ? "#f97316" : "#10b981";
 
   const combinedAlerts = useMemo(() => {
     const seen = new Set<string>();

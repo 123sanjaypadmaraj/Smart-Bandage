@@ -69,7 +69,7 @@ export function MeasurementChart({ records }: MeasurementChartProps) {
     );
   }
 
-  const estimatedColor = "#f59e0b";
+  const estimatedColor = "#f97316";
   const liveEdgeDot = makeLiveEdgeDot(data.length - 1, estimatedColor);
 
   return (
@@ -86,26 +86,26 @@ export function MeasurementChart({ records }: MeasurementChartProps) {
                 <stop offset="100%" stopColor={estimatedColor} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.15)" />
-            <XAxis dataKey="time" tick={{ fontSize: 10, fill: "#64748b" }} minTickGap={40} />
-            <YAxis tick={{ fontSize: 10, fill: "#64748b" }} width={40} />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(113,113,122,0.15)" />
+            <XAxis dataKey="time" tick={{ fontSize: 10, fill: "#71717a" }} minTickGap={40} />
+            <YAxis tick={{ fontSize: 10, fill: "#71717a" }} width={40} />
             <Tooltip
               contentStyle={{
-                background: isDark ? "rgba(8, 12, 24, 0.92)" : "rgba(255, 255, 255, 0.96)",
-                border: isDark ? "1px solid rgba(148,163,184,0.15)" : "1px solid rgba(100,116,139,0.2)",
+                background: isDark ? "rgba(10, 10, 12, 0.92)" : "rgba(255, 255, 255, 0.96)",
+                border: isDark ? "1px solid rgba(161,161,170,0.15)" : "1px solid rgba(113,113,122,0.2)",
                 borderRadius: 8,
                 fontSize: 12,
                 backdropFilter: "blur(8px)",
               }}
-              labelStyle={{ color: "#64748b" }}
+              labelStyle={{ color: "#71717a" }}
             />
             <Legend content={renderLegend} />
             <Area type="monotone" dataKey="estimated" stroke="none" fill="url(#estimatedFill)" isAnimationActive={false} legendType="none" />
-            <Line type="monotone" dataKey="raw" stroke="#94a3b8" dot={false} strokeWidth={1.5} name="raw_signal" isAnimationActive={false} />
+            <Line type="monotone" dataKey="raw" stroke="#a1a1aa" dot={false} strokeWidth={1.5} name="raw_signal" isAnimationActive={false} />
             <Line
               type="monotone"
               dataKey="processed"
-              stroke={isDark ? "#8fa3c7" : "#16233f"}
+              stroke={isDark ? "#818cf8" : "#4338ca"}
               dot={false}
               strokeWidth={2}
               name="processed_signal"

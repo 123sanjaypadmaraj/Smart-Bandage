@@ -32,6 +32,15 @@ const STATE_LABELS: Record<keyof typeof STATE_RANGE, string> = {
   perfusion: "Perfusion",
 };
 
+// digital_twin/state.py's WoundState fields -- what each bar is actually
+// tracking on the hidden physiological state, in plain language.
+const STATE_DESCRIPTIONS: Record<keyof typeof STATE_RANGE, string> = {
+  inflammation: "0 (none) to 1.5 (severe). Driven by CRP/pathogen level, temperature, and pH -- rises during infection onset.",
+  bacterial_load: "0 (sterile) to 1.5 (heavily colonized). Driven by pathogen growth and pH -- the underlying variable an infection alert is really about.",
+  moisture: "0 (dry) to 1 (saturated). Driven by impedance baseline and electrode fouling rate.",
+  perfusion: "0 (poor) to 1 (well-perfused). Driven by temperature and baseline stability -- low perfusion slows healing.",
+};
+
 /**
  * DT-6: patient profile + time-scale controls for the twin-backed
  * simulation mode (backend/app/simulation.py's DigitalTwinDevice), plus a
@@ -142,7 +151,7 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
           <button
             onClick={start}
             disabled={busy || !patientProfile}
-            className="rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 px-3.5 py-1.5 text-xs font-medium text-[#16233f] shadow-[0_4px_16px_rgba(245,158,11,0.25)] transition hover:brightness-105 disabled:opacity-50"
+            className="rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 px-3.5 py-1.5 text-xs font-medium text-[#0a0a0d] shadow-[0_4px_16px_rgba(249,115,22,0.25)] transition hover:brightness-105 disabled:opacity-50"
           >
             Start twin
           </button>
@@ -184,7 +193,7 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
                     <span className="text-emerald-600 dark:text-emerald-300">{lastGroundTruth.true_signal.toFixed(2)}</span>
                   </p>
                 </div>
-                <Sparkline values={estimatedHistory} stroke="#f59e0b" width={72} height={28} />
+                <Sparkline values={estimatedHistory} stroke="#f97316" width={72} height={28} />
                 <Sparkline values={trueHistory} stroke="#10b981" width={72} height={28} />
               </div>
 
@@ -195,11 +204,14 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
                   return (
                     <div key={key}>
                       <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400">
-                        <span>{STATE_LABELS[key]}</span>
+                        <span className="flex items-center gap-1">
+                          {STATE_LABELS[key]}
+                          <InfoHint text={STATE_DESCRIPTIONS[key]} align="left" />
+                        </span>
                         <span className="font-mono">{value.toFixed(2)}</span>
                       </div>
                       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
-                        <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-[#16233f]" style={{ width: `${pct}%` }} />
+                        <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-[#0a0a0d]" style={{ width: `${pct}%` }} />
                       </div>
                     </div>
                   );

@@ -5,7 +5,7 @@ export type Theme = "light" | "dark";
 
 function getInitialTheme(): Theme {
   const stored = localStorage.getItem(THEME_KEY);
-  return stored === "dark" ? "dark" : "light";
+  return stored === "light" ? "light" : "dark";
 }
 
 export function useTheme() {

@@ -7,6 +7,35 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Space Grotesk", "Inter", ui-sans-serif, sans-serif;
+
+  /* Recolor the app's "amber" accent scale to a vivid orange -- every
+     amber-* utility class (buttons, badges, glows, focus rings) picks this
+     up automatically without touching each component. */
+  --color-amber-50: var(--color-orange-50);
+  --color-amber-100: var(--color-orange-100);
+  --color-amber-200: var(--color-orange-200);
+  --color-amber-300: var(--color-orange-300);
+  --color-amber-400: var(--color-orange-400);
+  --color-amber-500: var(--color-orange-500);
+  --color-amber-600: var(--color-orange-600);
+  --color-amber-700: var(--color-orange-700);
+  --color-amber-800: var(--color-orange-800);
+  --color-amber-900: var(--color-orange-900);
+  --color-amber-950: var(--color-orange-950);
+
+  /* Recolor the app's "slate" neutrals to true black/gray (no blue tint),
+     so cards and surfaces read as near-black instead of navy. */
+  --color-slate-50: var(--color-neutral-50);
+  --color-slate-100: var(--color-neutral-100);
+  --color-slate-200: var(--color-neutral-200);
+  --color-slate-300: var(--color-neutral-300);
+  --color-slate-400: var(--color-neutral-400);
+  --color-slate-500: var(--color-neutral-500);
+  --color-slate-600: var(--color-neutral-600);
+  --color-slate-700: var(--color-neutral-700);
+  --color-slate-800: var(--color-neutral-800);
+  --color-slate-900: var(--color-neutral-900);
+  --color-slate-950: var(--color-neutral-950);
 }
 
 :root {
@@ -25,11 +54,11 @@ body,
 
 body {
   font-family: var(--font-sans);
-  background-color: #f7f8fb;
+  background-color: #fafafa;
   background-image:
-    radial-gradient(circle at 12% -8%, rgba(245, 158, 11, 0.14), transparent 42%),
-    radial-gradient(circle at 88% -4%, rgba(22, 35, 63, 0.1), transparent 40%),
-    radial-gradient(circle at 50% 115%, rgba(245, 158, 11, 0.06), transparent 48%);
+    radial-gradient(circle at 12% -8%, rgba(249, 115, 22, 0.13), transparent 42%),
+    radial-gradient(circle at 62% 8%, rgba(99, 102, 241, 0.08), transparent 40%),
+    radial-gradient(circle at 92% 60%, rgba(16, 185, 129, 0.07), transparent 45%);
   background-attachment: fixed;
   background-repeat: no-repeat;
   transition:
@@ -38,11 +67,12 @@ body {
 }
 
 .dark body {
-  background-color: #0b1220;
+  background-color: #08080a;
   background-image:
-    radial-gradient(circle at 12% -8%, rgba(245, 158, 11, 0.16), transparent 42%),
-    radial-gradient(circle at 88% -4%, rgba(30, 41, 59, 0.35), transparent 40%),
-    radial-gradient(circle at 50% 115%, rgba(245, 158, 11, 0.08), transparent 48%);
+    radial-gradient(circle at 12% -10%, rgba(249, 115, 22, 0.2), transparent 42%),
+    radial-gradient(circle at 60% 6%, rgba(99, 102, 241, 0.16), transparent 42%),
+    radial-gradient(circle at 94% 62%, rgba(16, 185, 129, 0.14), transparent 46%),
+    radial-gradient(circle at 50% 118%, rgba(249, 115, 22, 0.07), transparent 48%);
 }
 
 /* thin, unobtrusive scrollbars that match either theme */
@@ -77,12 +107,12 @@ body {
 }
 
 ::selection {
-  background: rgba(245, 158, 11, 0.35);
-  color: #16233f;
+  background: rgba(249, 115, 22, 0.35);
+  color: #0a0a0d;
 }
 .dark ::selection {
-  background: rgba(245, 158, 11, 0.35);
-  color: #f8fafc;
+  background: rgba(249, 115, 22, 0.35);
+  color: #fafafa;
 }
 
 @keyframes pulse-soft {
@@ -101,10 +131,10 @@ body {
 
 @keyframes tile-flash {
   0% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45);
+    box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.45);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+    box-shadow: 0 0 0 0 rgba(249, 115, 22, 0);
   }
 }
 

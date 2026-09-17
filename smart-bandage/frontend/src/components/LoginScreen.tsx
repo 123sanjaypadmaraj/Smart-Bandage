@@ -33,9 +33,10 @@ export function LoginScreen({ onLogin, notice }: LoginScreenProps) {
       <ThemeToggle className="absolute right-5 top-5" />
       <div className="grid w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_70px_rgba(15,23,42,0.12)] dark:border-white/10 dark:bg-white/[0.03] dark:shadow-[0_20px_70px_rgba(0,0,0,0.5)] dark:backdrop-blur-xl md:grid-cols-2">
         {/* brand panel */}
-        <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-[#16233f] via-[#101a30] to-[#16233f] p-8 md:flex">
-          <div className="absolute -left-16 -top-16 h-56 w-56 animate-pulse-soft rounded-full bg-amber-400/20 blur-3xl" />
-          <div className="absolute -bottom-20 -right-10 h-56 w-56 animate-pulse-soft rounded-full bg-amber-500/10 blur-3xl [animation-delay:1s]" />
+        <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-[#0a0a0d] via-[#0d0d11] to-[#0a0a0d] p-8 md:flex">
+          <div className="absolute -left-16 -top-16 h-56 w-56 animate-pulse-soft rounded-full bg-amber-400/25 blur-3xl" />
+          <div className="absolute left-1/3 top-1/4 h-64 w-64 animate-pulse-soft rounded-full bg-indigo-500/20 blur-3xl [animation-delay:0.6s]" />
+          <div className="absolute -bottom-20 -right-10 h-56 w-56 animate-pulse-soft rounded-full bg-emerald-500/15 blur-3xl [animation-delay:1s]" />
           <div
             className="pointer-events-none absolute inset-0 opacity-[0.07]"
             style={{
@@ -47,7 +48,7 @@ export function LoginScreen({ onLogin, notice }: LoginScreenProps) {
           <div className="relative">
             <div className="relative flex h-11 w-11 items-center justify-center">
               <span className="absolute inset-0 animate-ping rounded-xl bg-amber-400/40 [animation-duration:2.4s]" />
-              <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-amber-500 text-[#16233f] shadow-[0_0_30px_rgba(245,158,11,0.35)]">
+              <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-amber-500 text-[#0a0a0d] shadow-[0_0_30px_rgba(249,115,22,0.35)]">
                 <IconHeartPulse className="h-5 w-5" />
               </div>
             </div>
@@ -110,7 +111,7 @@ export function LoginScreen({ onLogin, notice }: LoginScreenProps) {
           <button
             type="submit"
             disabled={busy}
-            className="w-full rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 py-2.5 font-medium text-[#16233f] shadow-[0_8px_24px_rgba(245,158,11,0.25)] transition hover:brightness-105 disabled:opacity-50"
+            className="w-full rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 py-2.5 font-medium text-[#0a0a0d] shadow-[0_8px_24px_rgba(249,115,22,0.25)] transition hover:brightness-105 disabled:opacity-50"
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>
