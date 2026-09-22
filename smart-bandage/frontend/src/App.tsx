@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, setTokenExpiredHandler, setUnauthorizedHandler } from "./api";
 import { AIInsightPanel } from "./components/AIInsightPanel";
 import { AlertsPanel } from "./components/AlertsPanel";
+import { BandageTwinView } from "./components/BandageTwinView";
 import { IconActivity } from "./components/icons";
 import { LoginScreen } from "./components/LoginScreen";
 import { MeasurementChart } from "./components/MeasurementChart";
@@ -24,6 +25,7 @@ export default function App() {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [view, setView] = useState<"monitor" | "twin3d">("monitor");
 
   const {
     connected: wsConnected,
@@ -184,7 +186,31 @@ export default function App() {
       />
 
       <main className="flex-1 space-y-6 overflow-y-auto p-6 lg:p-8">
-        {!selectedDevice ? (
+        <div role="tablist" aria-label="Dashboard view" className="flex gap-2">
+          {([
+            ["monitor", "Device monitor"],
+            ["twin3d", "Bandage 3D Twin"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              role="tab"
+              type="button"
+              aria-selected={view === key}
+              onClick={() => setView(key)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-amber-500 ${
+                view === key
+                  ? "border-amber-400/50 bg-amber-400/10 text-amber-700 dark:text-amber-200"
+                  : "border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/[0.06]"
+              }`}
+            >
+              {view === key ? "● " : ""}
+              {label}
+            </button>
+          ))}
+        </div>
+        {view === "twin3d" ? (
+          <BandageTwinView />
+        ) : !selectedDevice ? (
           <div className="flex h-[70vh] flex-col items-center justify-center gap-3 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-white text-amber-600 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:text-amber-300 dark:shadow-none">
               <IconActivity className="h-6 w-6" />

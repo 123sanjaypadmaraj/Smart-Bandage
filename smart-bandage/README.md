@@ -232,3 +232,61 @@ python scripts/seed_demo_data.py # register demo devices + start a simulation
 python scripts/reset_db.py       # wipe the local smart_bandage.db
 ./scripts/run_checks.sh          # pytest + frontend typecheck/build, CI-equivalent
 ```
+
+## Bandage EIS digital twin (3D)
+
+An interactive twin of a graphene-PBASE-aptamer electrochemical-impedance (EIS)
+sensor detecting E. coli in wound fluid: a procedural three.js model of the
+bandage next to the equivalent-circuit analysis. Model code lives in
+`digital_twin/bandage/impedance.py` (Python) and `frontend/src/twin3d/eis.ts`
+(browser port, checked against the Python by `tests/test_eis_ts_parity.py`).
+
+**Run it.** Start the backend (`uvicorn backend.app.main:app --reload`; only
+needed for the optional backend cross-check) and the dashboard
+(`cd frontend && npm run dev`), then either open
+`http://localhost:5173/bandage-twin.html` (standalone page, no login) or sign in
+and pick the **Bandage 3D Twin** tab. Architecture notes:
+`docs/architecture/bandage_twin.md` (model) and
+`docs/architecture/bandage_twin_3d.md` (scene).
+
+**Sensor parameters** (modified Randles circuit, CPE for the double layer):
+
+| Parameter | Meaning | Default | Effect of E. coli binding |
+|---|---|---|---|
+| Rs | solution resistance | 120 ohm | +4 % at full coverage |
+| Rct | charge-transfer resistance | 2000 ohm | up to +160 % (bacteria insulate the surface) |
+| Cdl | double-layer capacitance | 2.0 uF | down to -35 % |
+| Warburg sigma | diffusion of the redox probe | 150 ohm s^-1/2 | up to +50 % |
+| abs(Z), phase | single-frequency readout at 100 Hz | | follows the above |
+| dZ % | change of abs(Z) at 100 Hz vs the baseline | | |
+| coverage theta | aptamer occupancy, `C / (Kd + C)`, Kd = 1e4 CFU/mL | | drives the bacteria on the surface |
+
+Detection: dRct% (fitted Rct after vs before) above 3 x the baseline-noise SD
+(4.5 %) is a positive; concentration is read off a log calibration line.
+
+**Assay sequence:** modified electrode, baseline impedance, sample exposure,
+target binding, second impedance measurement, compare with baseline, impedance
+change and detection result.
+
+**Controls.** Run / Pause / Resume / Reset, simulation speed, auto-repeat, step
+buttons that jump to a phase, a clean-control vs E. coli toggle and a
+10^1..10^8 CFU/mL slider. In the 3D view: camera presets (iso, front, side,
+top, macro) and X-ray, Explode, Flow, Labels and Orbit toggles; click a part
+(or a table row or circuit element) to select it in both views.
+
+**Headless testing (dev build only).** `window.bandageScene` is exposed under
+`npm run dev`; `window.bandageScene.tick(dt)` steps the scene by `dt` seconds
+without a visible tab or animation frames, e.g. for Playwright.
+
+**API.** `GET /api/twin/eis?cfu=1e4&seed=1&noise_pct=1&incubation_s=` runs the
+full assay in Python and returns baseline/post spectra, true and fitted
+parameters, deltas, detection and calibration (public, read-only, 422 outside
+cfu 0..1e9). The "Verify against backend twin" button under the panel compares
+it with the browser model (noise-free) and reports the largest relative
+difference.
+
+**Limits.** Circuit values, binding coefficients and the calibration are
+illustrative, not fitted to bench data. The browser and the API share the same
+calibration line (54.8 %/decade, -136 %, fitted to the model over 1e2..1e5 CFU/mL),
+so impedance values, detection calls and estimated CFU/mL agree. The sensor saturates at
+dRct% = 160 %, so estimates at very high concentration are unreliable.

@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
 from backend.app.database import SessionLocal, init_db
-from backend.app.routers import ai, alerts, auth, biomarkers, devices, measurements, simulation, ws
+from backend.app.routers import ai, alerts, auth, biomarkers, devices, eis, measurements, simulation, ws
 from backend.app.security import ensure_seed_user
 
 
@@ -58,6 +58,7 @@ app.include_router(alerts.router)
 app.include_router(simulation.router)
 app.include_router(ws.router)
 app.include_router(ai.router)
+app.include_router(eis.router)
 
 
 @app.get("/health", tags=["meta"])

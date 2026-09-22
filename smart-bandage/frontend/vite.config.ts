@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 // Phase 4 backend -- see .env.example.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: { input: { main: "index.html", bandageTwin: "bandage-twin.html" } },
+  },
   server: {
     port: 5173,
   },
