@@ -1,0 +1,53 @@
+# Observability overlay -- adds Prometheus (scrapes the backend's GET
+# /metrics) + Grafana (dashboards over that Prometheus) on top of
+# docker-compose.yml, the same way docker-compose.tls.yml adds TLS. Not
+# used by a plain `docker compose up`; combine explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+#
+# Prometheus: http://localhost:9090  Grafana: http://localhost:3000
+# (login admin/admin -- Grafana's own out-of-the-box default, forces a
+# password change on first login; nothing this repo sets or stores)
+#
+# docker-compose.yml's `backend` service already exposes GET /metrics
+# (backend/app/metrics.py) with zero config -- this overlay just adds the
+# two containers that scrape/visualize it, plus the Prometheus datasource
+# is auto-provisioned in Grafana (docker/grafana-datasource.yml) so
+# there's nothing to click through before you can build a dashboard. See
+# docs/observability.md for the metric names and a walkthrough.
+#
+# Works with either base file -- docker-compose.yml (Postgres) or
+# docker-compose.sqlite.yml -- since it only adds services, it never
+# touches `backend`:
+#
+#   docker compose -f docker-compose.sqlite.yml -f docker-compose.observability.yml up --build
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      # Nothing sensitive -- this is the well-known Grafana OSS default,
+      # only reachable at localhost:3000 unless you've exposed the port
+      # further yourself. Change it (or set up real auth) before doing that.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./docker/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:

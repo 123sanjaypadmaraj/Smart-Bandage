@@ -15,11 +15,19 @@ three failure surfaces (`battery_drain`'s closed-form elapsed-time formula,
 `declining_quality`'s checkpoint curve, `CommsDropoutCycle`'s fixed
 ok/drop index cycle) with running state that can go up or down, not just
 follow a script.
+
+Consolidation note (DT-3/DT-7): every `step()` below takes an optional
+`rng` so `DigitalTwinDevice` (observation.py) can drive these processes
+from one seeded `random.Random` per device -- what makes
+`digital_twin/engine.py`'s seeded, bit-for-bit-reproducible runs possible.
+Omitting `rng` keeps the previous (global-`random`, unseeded) behavior for
+existing direct callers/tests.
 """
 from __future__ import annotations
 
 import math
 import random
+from typing import Optional
 
 from simulator.signals.generators import ou_step
 
@@ -30,22 +38,40 @@ class BatteryProcess:
     Same shape as simulator/signals/generators.py:battery_drain (monotonic
     drain plus a small wobble) but tick-by-tick and rate-coupled to link
     quality instead of a closed-form function of total elapsed time.
+
+    `_true_pct` only ever decreases (the actual charge remaining);
+    `.pct` overlays the current wobble on top of it for display, the way a
+    real fuel gauge's reported percentage jitters a little from one read to
+    the next without the underlying charge actually going up and down.
+    Bug note: an earlier version added `_wobble * dt_seconds` directly into
+    a single running `pct` every step, so the jitter never un-happened --
+    over a long run (hours/days, exactly what digital_twin/engine.py's bulk
+    generation and DT-5's backtests actually do) that additive jitter
+    behaves like a slow random walk on top of the real drain, drifting the
+    reported percentage tens of points off the true one. Recomputing `.pct`
+    fresh from `_true_pct` + the *current* wobble each time fixes that: the
+    jitter can only ever be off by one tick's wobble, never by its
+    accumulated history.
     """
 
     def __init__(self, start_pct: float = 100.0, base_drain_pct_per_hour: float = 2.0) -> None:
-        self.pct = start_pct
+        self._true_pct = start_pct
         self.base_drain_pct_per_hour = base_drain_pct_per_hour
         self._wobble = 0.0
 
-    def step(self, dt_seconds: float, link_quality: float) -> float:
+    @property
+    def pct(self) -> float:
+        return max(0.0, min(100.0, self._true_pct + self._wobble))
+
+    def step(self, dt_seconds: float, link_quality: float, rng: Optional[random.Random] = None) -> float:
         if dt_seconds <= 0:
             return round(self.pct, 2)
         # a poor link means more retries/retransmits on the radio, which
         # costs real battery -- up to 2.5x the base drain rate at quality 0
         retry_penalty = 1.0 + 1.5 * (1.0 - link_quality)
         drained = self.base_drain_pct_per_hour * retry_penalty * (dt_seconds / 3600.0)
-        self._wobble = ou_step(self._wobble, 0.15)
-        self.pct = max(0.0, min(100.0, self.pct - drained + self._wobble * min(dt_seconds, 1.0)))
+        self._true_pct = max(0.0, min(100.0, self._true_pct - drained))
+        self._wobble = ou_step(self._wobble, 0.15, rng=rng)
         return round(self.pct, 2)
 
 
@@ -62,7 +88,13 @@ class ElectrodeFoulingProcess:
     def __init__(self) -> None:
         self.level = 0.0
 
-    def step(self, dt_seconds: float, moisture: float, bacterial_load: float) -> float:
+    def step(
+        self,
+        dt_seconds: float,
+        moisture: float,
+        bacterial_load: float,
+        rng: Optional[random.Random] = None,
+    ) -> float:
         if dt_seconds <= 0:
             return self.level
         accumulation_per_hour = 0.02 * (0.3 + moisture) * (0.5 + bacterial_load)
@@ -73,7 +105,8 @@ class ElectrodeFoulingProcess:
         # small enough that accumulated jitter over a multi-hour run stays
         # well below the deterministic drift above, or the state-dependent
         # signal this process exists to carry gets swamped by noise.
-        jitter = random.gauss(0.0, 0.00005 * math.sqrt(dt_seconds))
+        generator = rng if rng is not None else random
+        jitter = generator.gauss(0.0, 0.00005 * math.sqrt(dt_seconds))
         self.level = max(0.0, min(1.0, self.level + drift + jitter))
         return self.level
 
@@ -95,7 +128,7 @@ class LinkQualityProcess:
         self.value = start
         self.target = target
 
-    def step(self, dt_seconds: float) -> float:
+    def step(self, dt_seconds: float, rng: Optional[random.Random] = None) -> float:
         if dt_seconds <= 0:
             return self.value
         # exact OU transition, not an Euler step -- see
@@ -105,6 +138,7 @@ class LinkQualityProcess:
         decay = math.exp(-self._RATE_PER_SECOND * dt_seconds)
         reverted = self.target + (self.value - self.target) * decay
         noise_std = self._VOL * math.sqrt((1.0 - decay * decay) / (2.0 * self._RATE_PER_SECOND))
-        innovation = random.gauss(0.0, noise_std)
+        generator = rng if rng is not None else random
+        innovation = generator.gauss(0.0, noise_std)
         self.value = max(0.0, min(1.0, reverted + innovation))
         return self.value

@@ -15,6 +15,13 @@ SensorInterface, same per-channel isolation in `read_all()`, but ticking
 on DigitalTwinEngine's seeded, wall-clock-decoupled loop
 (digital_twin/engine.py). Default stays "scenario" so nothing existing
 changes; a caller has to ask for the twin explicitly.
+
+`default_scenario` names a value from a different registry depending on
+`engine`: one of simulator/scenarios/scenarios.py's 7 fixed scenarios for
+"scenario", or one of digital_twin/profiles.py's clinical profiles for
+"digital_twin" -- the two were never interchangeable, so leaving it at
+`None` picks each engine's own sensible default instead of a literal
+default that would only be valid for one of them.
 """
 from __future__ import annotations
 
@@ -25,9 +32,12 @@ from common.schemas.device import DeviceStatus
 from common.schemas.measurement import RawMeasurement
 from digital_twin.adapter import DigitalTwinSensor
 from digital_twin.engine import DigitalTwinEngine
+from digital_twin.profiles import DEFAULT_PROFILE
 from simulator.sensors.scenario_sensor import ScenarioSensor
 
 EngineName = Literal["scenario", "digital_twin"]
+
+_DEFAULT_PHASE2_SCENARIO = "normal"
 
 
 class MultiChannelSensor:
@@ -37,7 +47,7 @@ class MultiChannelSensor:
         self,
         device_id: str,
         channel_ids: Iterable[str],
-        default_scenario: str = "normal",
+        default_scenario: Optional[str] = None,
         engine: EngineName = "scenario",
         seed: Optional[int] = None,
         dt_seconds: float = 1.0,
@@ -45,11 +55,13 @@ class MultiChannelSensor:
         self.device_id = device_id
         self.engine = engine
         if engine == "scenario":
+            scenario = default_scenario or _DEFAULT_PHASE2_SCENARIO
             self.channels: Dict[str, SensorInterface] = {
-                channel_id: ScenarioSensor(device_id, channel_id, scenario=default_scenario)
+                channel_id: ScenarioSensor(device_id, channel_id, scenario=scenario)
                 for channel_id in channel_ids
             }
         elif engine == "digital_twin":
+            default_scenario = default_scenario or DEFAULT_PROFILE
             # Distinct seed per channel (still derived from one base seed)
             # so a reproducible device doesn't play the identical noise
             # trace on every channel; `seed=None` stays non-reproducible

@@ -20,6 +20,7 @@ from common.interfaces.sensor_interface import SensorInterface
 from common.schemas.device import DeviceStatus
 from common.schemas.measurement import RawMeasurement
 from digital_twin.engine import DigitalTwinEngine
+from digital_twin.profiles import DEFAULT_PROFILE
 
 
 class DigitalTwinSensor(SensorInterface):
@@ -36,7 +37,7 @@ class DigitalTwinSensor(SensorInterface):
         self,
         device_id: str,
         channel_id: str,
-        scenario: str = "normal",
+        scenario: str = DEFAULT_PROFILE,
         dt_seconds: float = 1.0,
         seed: Optional[int] = None,
         battery_start_pct: float = 100.0,

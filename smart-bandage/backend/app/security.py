@@ -81,6 +81,15 @@ def get_current_username(token: Optional[str] = Depends(_oauth2_scheme)) -> str:
         raise _credentials_exception()
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        # Refresh tokens are told apart from access tokens only by this
+        # "typ" claim (see create_refresh_token/decode_refresh_token above).
+        # Without this check a long-lived (JWT_REFRESH_EXPIRES_DAYS, 30 by
+        # default) refresh token would work as a Bearer token on every
+        # protected endpoint -- reject it here the same way
+        # decode_refresh_token rejects an access token used as a refresh
+        # token.
+        if payload.get("typ") == "refresh":
+            raise _credentials_exception()
         username = payload.get("sub")
         if username is None:
             raise _credentials_exception()
