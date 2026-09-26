@@ -123,8 +123,8 @@ detected  <=>  dRct% > k_sigma * noise_SD
 | A_RCT / A_CDL / A_RS / A_SIGMA | 1.6 / 0.35 / 0.04 / 0.5 | - |
 | Sweep | 0.1 Hz - 100 kHz, 10 pts/decade (61 points) | Hz |
 | Reference frequency for the single-number readout | 100 | Hz |
-| Calibration slope / intercept | 14 / -20 | % per decade / % |
-| Baseline noise SD, k_sigma (threshold 4.5 %, LOD about 56 CFU/mL) | 1.5, 3 | %, - |
+| Calibration slope / intercept | 54.8 / -136 | % per decade / % |
+| Baseline noise SD, k_sigma (threshold 4.5 %, LOD about 367 CFU/mL) | 1.5, 3 | %, - |
 
 **Assay sequence** (`EisAssay.run`, phases `idle -> baseline -> exposure ->
 binding -> measure2 -> compare -> result`): measure the clean electrode
