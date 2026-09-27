@@ -5,8 +5,10 @@ physical device) sitting on a simulated wound, plus a redesigned simulation
 engine underneath it. The earlier DT-1..DT-6 modules model the *patient*; nothing
 described what is between the wound and the electrode. This does.
 
-It is **additive**: none of the existing `digital_twin/*.py` modules, the
-backend, or their tests were changed.
+It is **additive**: none of the existing `digital_twin/*.py` modules or their
+tests were changed. The backend runs it as a third `/simulation` engine beside
+scenario playback and DT-6's `DigitalTwinDevice` (see "Running it live" below)
+without changing either of those.
 
 ## What is modeled
 
@@ -74,6 +76,39 @@ Sensitivity and t90 are *measured* on the twin (a fresh sensor held in a
 solution and then stepped), so they include the full stack. Noise, LOD, wear
 life and battery life are computed from the design's own numbers.
 
+## Running it live (backend `/simulation`)
+
+`POST /simulation/start` with `"bandage_design": "<preset>"` (list them with
+`GET /simulation/bandage-designs`; optional `seed`, and `time_scale` as for
+DT-6) runs a `BandageTwin` inside `backend/app/simulation.py`'s
+`DeviceSimulation`. It is mutually exclusive with `patient_profile` (400 if
+both are set) and, like DT-6, rejects `/simulation/scenario` (409).
+
+* **Channels** come from the design's electrodes (`CH-01` aptamer, `CH-02`
+  glucose, `CH-03` pH for every preset), not from the request's `channels`;
+  `/start` registers them, adding any a pre-existing device row lacks.
+* **Each tick** advances the one twin by wall-clock dt x `time_scale`, then
+  `sample()`s every electrode at that instant -- the same shared-instant
+  guarantee `read_in_cycle`/`BandageTwinSensor` give one-channel callers, done
+  directly because the simulation loop already reads all channels per tick.
+  Faulting channels (battery, delamination, lifted dressing, lost BLE packet)
+  surface as `DEVICE_ERROR` alerts exactly like the other engines.
+* **Units**: the AFE's output *is* the device reading -- normalized a.u.
+  (100 = a fresh sensor's nominal response), not a physical concentration --
+  so the pipelines use identity calibration and store `unit: "a.u."`.
+  Mapping back to nM / mM / pH needs an inverse transducer curve and is not
+  done.
+* **WS messages** on `/ws/devices/{device_id}` (shapes in
+  `backend/app/schemas.py`, listed in `backend/app/routers/ws.py`):
+  `twin_bandage_truth` = `{device_id, bandage_design, timestamp, truth}` with
+  `truth = dataclasses.asdict(Truth)`, dev-only like DT-6's
+  `twin_ground_truth` (which is untouched); `twin_eis` = `{device_id,
+  channel_id, timestamp, eis}` with `eis = eis_from_twin(...).to_dict()` at
+  1.5 % per-point noise (the calibration's baseline-noise SD), one per
+  aptamer channel per tick, **not** dev-gated since it is what an EIS reader
+  would actually report. The noise seed is derived from the twin's seed and a
+  tick counter, so a seeded run is reproducible.
+
 ## Limits — read before quoting a number
 
 * **The parameters are illustrative, not fitted.** Layer thicknesses,
@@ -86,9 +121,21 @@ life and battery life are computed from the design's own numbers.
 * The wound bed is a small qualitative model, not a clinical healing model.
 * The sensing film doesn't deplete local analyte (fine for a monolayer on
   ~1 mm²; would matter for a large enzymatic electrode).
-* Not yet wired into the backend `/simulation` endpoints: they still use the
-  DT-2 `DigitalTwinDevice`. `BandageTwinSensor` / `sensors_for(twin)` is the
-  drop-in for that switch.
+* The live `/simulation` engine (above) starts every run from the design's
+  default wound bed with no scheduled events; there is no API yet to
+  `schedule()` an infection/antibiotic/disturbance on a running twin, pick
+  `WoundBedParams`, or snapshot/fork it.
+* Live `twin_eis` compares against the *clean* electrode (`EisParams()`,
+  theta = 0), while the twin's aptamer starts equilibrated with the wound's
+  baseline marker (~20 nM vs the aptamer's Kd 100 nM, theta ~0.17). So on the
+  default, healing wound the reading starts at dRct ~ +27 %, `detected: true`,
+  and decays as the marker falls (seed 1: +18 % at 24 h, +8.5 % at 72 h,
+  below the 4.5 % threshold by ~1 week). The twin's nM-scale occupancy and
+  the EIS model's CFU/mL calibration are two illustrative models joined at
+  theta; `cfu_equivalent_per_ml` is an inverse-Langmuir mapping, not a count.
+* A live run's readings are reproducible for a given `seed` and sequence of
+  tick dts, but the dts come from the wall clock, so two live runs with the
+  same seed won't match tick for tick.
 * `RngStreams`/`SimClock`/`EventQueue` are general; migrating DT-2/DT-3 onto
   them (and retiring their global-`random` processes) is a separate change,
   deliberately not done here to avoid colliding with the consolidation branches.
