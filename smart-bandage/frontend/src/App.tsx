@@ -40,6 +40,8 @@ export default function App() {
     liveAlerts,
     lastGroundTruth,
     groundTruthHistory,
+    eisByChannel,
+    lastBandageTruth,
   } = useDeviceSocket(selectedDeviceId);
 
   function handleLogin(newToken: string, newRefreshToken: string) {
@@ -222,7 +224,12 @@ export default function App() {
               </div>
             }
           >
-            <BandageTwinView />
+            {/* Fed from the one device socket above rather than opening a
+                second one in the lazy chunk: the WS is already live for the
+                selected device whichever tab is showing. */}
+            <BandageTwinView
+              live={{ deviceId: selectedDeviceId, connected: wsConnected, eisByChannel, lastBandageTruth }}
+            />
           </Suspense>
         ) : !selectedDevice ? (
           <div className="flex h-[70vh] flex-col items-center justify-center gap-3 text-center">
