@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { api, setTokenExpiredHandler, setUnauthorizedHandler } from "./api";
 import { AIInsightPanel } from "./components/AIInsightPanel";
 import { AlertsPanel } from "./components/AlertsPanel";
-import { BandageTwinView } from "./components/BandageTwinView";
 import { IconActivity } from "./components/icons";
 import { LoginScreen } from "./components/LoginScreen";
 import { MeasurementChart } from "./components/MeasurementChart";
@@ -12,6 +11,13 @@ import { StatusBar } from "./components/StatusBar";
 import { TwinControlPanel } from "./components/TwinControlPanel";
 import { useDeviceSocket } from "./hooks/useDeviceSocket";
 import type { AlertItem, Device, DeviceStatus, MeasurementRecord } from "./types";
+
+// Lazy: pulls in three.js and the twin3d module graph, which are otherwise
+// the bulk of the main bundle (see docs/architecture -- code-splitting
+// note) despite most sessions never opening this tab.
+const BandageTwinView = lazy(() =>
+  import("./components/BandageTwinView").then((m) => ({ default: m.BandageTwinView })),
+);
 
 const TOKEN_KEY = "smart-bandage.token";
 const REFRESH_TOKEN_KEY = "smart-bandage.refresh_token";
@@ -209,7 +215,15 @@ export default function App() {
           ))}
         </div>
         {view === "twin3d" ? (
-          <BandageTwinView />
+          <Suspense
+            fallback={
+              <div className="flex h-[70vh] items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+                Loading 3D twin…
+              </div>
+            }
+          >
+            <BandageTwinView />
+          </Suspense>
         ) : !selectedDevice ? (
           <div className="flex h-[70vh] flex-col items-center justify-center gap-3 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-white text-amber-600 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:text-amber-300 dark:shadow-none">

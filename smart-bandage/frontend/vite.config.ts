@@ -8,6 +8,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: { input: { main: "index.html", bandageTwin: "bandage-twin.html" } },
+    // BandageTwinView is React.lazy()-loaded (App.tsx) specifically so its
+    // three.js-heavy chunk splits out of the main entry and only downloads
+    // when a session opens the 3D twin tab. That chunk is still >500kB on
+    // its own account of three.js, which is expected, not a regression --
+    // raise the warning limit instead of chasing an unavoidable number.
+    chunkSizeWarningLimit: 800,
   },
   server: {
     port: 5173,
