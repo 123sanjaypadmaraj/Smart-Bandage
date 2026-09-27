@@ -1,18 +1,28 @@
 # Bandage 3D EIS twin: scene architecture
 
 Browser-side visualisation of the EIS biosensor twin described in
-[`bandage_twin.md`](bandage_twin.md). Everything is client-side; the backend is
-only used by the optional cross-check (`GET /api/twin/eis`).
+[`bandage_twin.md`](bandage_twin.md). It has two data sources: a self-contained
+client-side assay (`useAssay.ts`/`AssayController`, still fully local -- the
+backend is only used by that path's optional cross-check, `GET /api/twin/eis`)
+and, since the backend's `BandageTwin` engine went live behind
+`/simulation/start` (see "Running it live" in `bandage_twin.md`), a live path
+(`useLiveAssay.ts`) that renders whatever the running twin actually broadcasts
+over `WS /ws/devices/{device_id}` (`twin_eis`, plus the dev-only
+`twin_bandage_truth`) -- no local stepper, no cross-check needed. The 3D scene
+and EIS panel don't care which produced their `AssayState`; `BandageTwinView`
+picks between the two (auto-switching to Live once a device starts sending
+`twin_eis`) and both feed the same components below.
 
 ## Files (`frontend/src/twin3d/`)
 
 | File | Role |
 |---|---|
 | `types.ts` | The contract: `EisParams`, `AssayState`, `AssayPhase`, `PartKey`, `BandageScene`. Its header comment holds the circuit equations and defaults. |
-| `eis.ts` | Pure TypeScript model: `impedance`, `spectrum`, `logSweep`, `coverage`, `paramsAtCoverage`, Levenberg-Marquardt `fitRandles`, calibration/LOD, and `AssayController` (phase sequencer producing `AssayState`). Port of `digital_twin/bandage/impedance.py`. |
+| `eis.ts` | Pure TypeScript model: `impedance`, `spectrum`, `logSweep`, `coverage`, `paramsAtCoverage`, Levenberg-Marquardt `fitRandles`, calibration/LOD, and `AssayController` (phase sequencer producing `AssayState`). Port of `digital_twin/bandage/impedance.py`. Used by both the manual and live paths (live re-derives the noise-free baseline spectrum with these same pure functions). |
 | `eis.selfcheck.ts`, `eis.dump.ts` | Node self-check; JSON dump used by `tests/test_eis_ts_parity.py` (run with `node --experimental-strip-types`). |
-| `useAssay.ts` | React hook: owns an `AssayController`, drives it from `requestAnimationFrame` (paused while the tab is hidden), exposes `state` and `controls`. |
-| `EisPanel.tsx` | Workflow stepper, controls, Nyquist/Bode plots, parameter table, circuit diagram, detection card. |
+| `useAssay.ts` | Manual-mode React hook: owns an `AssayController`, drives it from `requestAnimationFrame` (paused while the tab is hidden), exposes `state` and `controls`. |
+| `useLiveAssay.ts` | Live-mode React hook: derives `AssayState` from `useDeviceSocket`'s `lastEis`/`lastBandageTruth` (no local stepper); `controls` is `null` since the backend twin owns the assay. Marks `stale` when the socket drops or no `twin_eis` has arrived recently. |
+| `EisPanel.tsx` | Workflow stepper, controls, Nyquist/Bode plots, parameter table, circuit diagram, detection card. `controls` is `AssayControls | null` -- the workflow stepper is omitted on the live path, where there's nothing to step. |
 | `BandageTwin3D.tsx` | React wrapper around the scene: view/toggle toolbar, selection, `window.bandageScene` in dev builds. |
 | `bandageScene.ts` | Scene factory `createBandageScene`: renderer, camera, controls, picking, pins/HUD, telemetry-to-visual mapping, render loop. |
 | `scene/model.ts` | Procedural bandage: backing film, adhesive, pad, three-electrode cell, PCB, chip, crystal, coin cell, LED. |
