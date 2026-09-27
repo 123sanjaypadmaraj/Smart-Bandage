@@ -3,6 +3,7 @@ import type {
   AIChatTurn,
   AIInsight,
   AlertItem,
+  BandageDesignInfo,
   Device,
   DeviceStatus,
   MeasurementRecord,
@@ -126,6 +127,10 @@ export const api = {
       patient_profile?: string;
       time_scale?: number;
       twin_channel_id?: string;
+      // DT-3: the physically-modelled bandage twin instead. Mutually
+      // exclusive with patient_profile (the backend 400s on both), so
+      // callers send one or the other, never both.
+      bandage_design?: string;
     },
   ) => request<{ status: string; twin: boolean }>("/simulation/start", { method: "POST", body: JSON.stringify(body) }, token),
 
@@ -141,6 +146,9 @@ export const api = {
 
   // DT-6: twin-backed mode -- components/TwinControlPanel.tsx.
   patientProfiles: () => request<PatientProfileInfo[]>("/simulation/patient-profiles"),
+
+  // DT-3: bandage-twin mode, the other half of TwinControlPanel's picker.
+  bandageDesigns: () => request<BandageDesignInfo[]>("/simulation/bandage-designs"),
 
   // Dev-only "ground truth overlay" -- 404s in production (see
   // backend/app/routers/simulation.py) and whenever the device isn't

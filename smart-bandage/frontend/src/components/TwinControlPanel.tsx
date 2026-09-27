@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api";
-import type { PatientProfileInfo, TwinGroundTruth } from "../types";
+import type { BandageDesignInfo, PatientProfileInfo, TwinGroundTruth } from "../types";
 import { IconShield } from "./icons";
 import { InfoHint } from "./InfoHint";
 import { Sparkline } from "./Sparkline";
@@ -34,6 +34,23 @@ const STATE_LABELS: Record<keyof typeof STATE_RANGE, string> = {
 
 // digital_twin/state.py's WoundState fields -- what each bar is actually
 // tracking on the hidden physiological state, in plain language.
+// Which engine "Start twin" asks for. They are mutually exclusive on the
+// backend (POST /simulation/start 400s if both are set), so the panel only
+// ever holds one choice and sends one field.
+type TwinSource = "profile" | "design";
+
+const SOURCE_OPTIONS: { id: TwinSource; label: string; hint: string }[] = [
+  { id: "profile", label: "Patient profile", hint: "DT-6: one channel driven by a physiological hidden state." },
+  {
+    id: "design",
+    label: "Bandage design",
+    hint: "DT-3: the physically-modelled bandage (wound bed, diffusion, aptamer binding, fouling, full EIS) -- also drives the Bandage 3D Twin tab's Live mode.",
+  },
+];
+
+const SELECT_CLASS =
+  "rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 outline-none transition focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/20 disabled:opacity-60 dark:border-white/10 dark:bg-slate-950/60 dark:text-slate-100 dark:focus:border-amber-400/60 dark:focus:ring-amber-400/20";
+
 const STATE_DESCRIPTIONS: Record<keyof typeof STATE_RANGE, string> = {
   inflammation: "0 (none) to 1.5 (severe). Driven by CRP/pathogen level, temperature, and pH -- rises during infection onset.",
   bacterial_load: "0 (sterile) to 1.5 (heavily colonized). Driven by pathogen growth and pH -- the underlying variable an infection alert is really about.",
@@ -49,10 +66,17 @@ const STATE_DESCRIPTIONS: Record<keyof typeof STATE_RANGE, string> = {
  * reports for it. import.meta.env.DEV gates the overlay client-side; the
  * backend also never broadcasts twin_ground_truth in production, so a prod
  * build sees nothing here to fetch even if this rendered anyway.
+ *
+ * DT-3 adds a second source in the same panel: a bandage design, which
+ * starts the physically-modelled BandageTwin instead. Its live EIS output
+ * is rendered by the Bandage 3D Twin tab, not here.
  */
 export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, groundTruthHistory }: TwinControlPanelProps) {
   const [profiles, setProfiles] = useState<PatientProfileInfo[]>([]);
   const [patientProfile, setPatientProfile] = useState<string>("");
+  const [designs, setDesigns] = useState<BandageDesignInfo[]>([]);
+  const [bandageDesign, setBandageDesign] = useState<string>("");
+  const [source, setSource] = useState<TwinSource>("profile");
   const [timeScale, setTimeScale] = useState(60);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +91,18 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
       })
       .catch(() => {
         /* twin control panel is non-critical to show on first load */
+      });
+  }, []);
+
+  useEffect(() => {
+    api
+      .bandageDesigns()
+      .then((list) => {
+        setDesigns(list);
+        setBandageDesign((current) => current || list[0]?.name || "");
+      })
+      .catch(() => {
+        /* as with profiles: a backend without the endpoint just leaves this picker empty */
       });
   }, []);
 
@@ -91,7 +127,7 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
       await api.startSimulation(token, {
         device_id: deviceId,
         channels: channels.length ? channels : ["CH-01"],
-        patient_profile: patientProfile,
+        ...(source === "design" ? { bandage_design: bandageDesign } : { patient_profile: patientProfile }),
         time_scale: timeScale,
       });
       setRunning(true);
@@ -104,6 +140,9 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
     });
 
   const activeProfile = profiles.find((p) => p.name === patientProfile);
+  const activeDesign = designs.find((d) => d.name === bandageDesign);
+  const activeSource = SOURCE_OPTIONS.find((o) => o.id === source) ?? SOURCE_OPTIONS[0];
+  const canStart = source === "design" ? !!bandageDesign : !!patientProfile;
   const trueHistory = groundTruthHistory.map((g) => g.true_signal);
   const estimatedHistory = groundTruthHistory.map((g) => g.estimated_signal ?? g.true_signal);
 
@@ -117,21 +156,66 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
         />
       </h2>
 
+      <div role="radiogroup" aria-label="Twin source" className="mb-2.5 flex flex-wrap items-center gap-1.5">
+        {SOURCE_OPTIONS.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={source === o.id}
+            title={o.hint}
+            onClick={() => setSource(o.id)}
+            disabled={running}
+            className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition disabled:opacity-60 ${
+              source === o.id
+                ? "border-amber-400/50 bg-amber-400/10 text-amber-700 dark:text-amber-200"
+                : "border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/[0.06]"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+        <InfoHint text={activeSource.hint} />
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={patientProfile}
-          onChange={(e) => setPatientProfile(e.target.value)}
-          disabled={running}
-          title={activeProfile?.description}
-          className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-900 outline-none transition focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/20 disabled:opacity-60 dark:border-white/10 dark:bg-slate-950/60 dark:text-slate-100 dark:focus:border-amber-400/60 dark:focus:ring-amber-400/20"
-        >
-          {profiles.map((p) => (
-            <option key={p.name} value={p.name} title={p.description}>
-              {p.name.replaceAll("_", " ")}
-            </option>
-          ))}
-        </select>
-        {activeProfile && <InfoHint text={activeProfile.description} />}
+        {source === "profile" ? (
+          <>
+            <select
+              value={patientProfile}
+              onChange={(e) => setPatientProfile(e.target.value)}
+              disabled={running}
+              title={activeProfile?.description}
+              aria-label="Patient profile"
+              className={SELECT_CLASS}
+            >
+              {profiles.map((p) => (
+                <option key={p.name} value={p.name} title={p.description}>
+                  {p.name.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+            {activeProfile && <InfoHint text={activeProfile.description} />}
+          </>
+        ) : (
+          <>
+            <select
+              value={bandageDesign}
+              onChange={(e) => setBandageDesign(e.target.value)}
+              disabled={running}
+              title={activeDesign?.description}
+              aria-label="Bandage design"
+              className={SELECT_CLASS}
+            >
+              {designs.map((d) => (
+                <option key={d.name} value={d.name} title={d.description}>
+                  {d.name.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+            {activeDesign && <InfoHint text={activeDesign.description} />}
+          </>
+        )}
 
         <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
           time scale
@@ -150,7 +234,7 @@ export function TwinControlPanel({ token, deviceId, channels, lastGroundTruth, g
         {!running ? (
           <button
             onClick={start}
-            disabled={busy || !patientProfile}
+            disabled={busy || !canStart}
             className="rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 px-3.5 py-1.5 text-xs font-medium text-[#0a0a0d] shadow-[0_4px_16px_rgba(249,115,22,0.25)] transition hover:brightness-105 disabled:opacity-50"
           >
             Start twin

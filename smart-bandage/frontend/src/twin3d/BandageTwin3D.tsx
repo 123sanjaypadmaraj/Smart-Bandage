@@ -22,11 +22,12 @@ const TOGGLE_BUTTONS: { id: ToggleKey; label: string; title: string }[] = [
   { id: "autoRotate", label: "Orbit", title: "Slowly auto-orbit the camera" },
 ];
 
-const btnBase =
+// Exported so BandageTwinView's Manual/Live toggle shares this toolbar's look.
+export const btnBase =
   "rounded-lg border px-2.5 py-1 text-[11px] font-medium leading-none transition focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40";
-const btnOff =
+export const btnOff =
   "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300 dark:hover:bg-white/[0.08]";
-const btnOn =
+export const btnOn =
   "border-amber-500/60 bg-amber-500/15 text-amber-700 dark:border-amber-400/50 dark:bg-amber-400/15 dark:text-amber-300";
 
 interface Props {

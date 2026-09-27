@@ -14,7 +14,10 @@ import type { AssayPhase, AssayState, EisParams, EisSpectrum, PartKey } from './
 
 export interface EisPanelProps {
   state: AssayState;
-  controls: AssayControls;
+  /** null on the Live path (useLiveAssay): the backend owns the assay, so the
+   * manual stepper, run/pause and sample-concentration inputs would only
+   * pretend to control it -- the workflow card is omitted instead. */
+  controls: AssayControls | null;
   selected: PartKey | null;
   onSelect: (p: PartKey | null) => void;
 }
@@ -676,7 +679,7 @@ export function EisPanel({ state, controls, selected, onSelect }: EisPanelProps)
   const dark = useIsDark();
   return (
     <div className="@container space-y-4">
-      <Workflow state={state} controls={controls} />
+      {controls && <Workflow state={state} controls={controls} />}
       <Charts state={state} dark={dark} />
       <div className="grid gap-4 @4xl:grid-cols-2">
         <Circuit state={state} selected={selected} onSelect={onSelect} />
