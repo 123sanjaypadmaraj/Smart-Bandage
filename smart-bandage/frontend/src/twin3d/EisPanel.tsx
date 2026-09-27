@@ -391,18 +391,18 @@ interface Row {
 }
 
 const ROWS: Row[] = [
-  { key: 'rs', name: 'Rs', unit: 'Ω', get: (p) => p.rs, fmt: (v) => fmtNum(v), hint: 'Solution resistance: opposition of the electrolyte between the electrodes.',
-    why: 'Barely moves: the electrolyte is unchanged, so Rs acts as an internal control.' },
-  { key: 'rct', name: 'Rct', unit: 'Ω', get: (p) => p.rct, fmt: (v) => fmtNum(v), hint: 'Charge-transfer resistance: how hard it is for the redox probe to exchange electrons with the graphene surface.',
-    why: 'Interfacial resistance rises because bacteria insulate the electrode and block the redox probe. This is the main signal.' },
-  { key: 'cdl', name: 'Cdl', unit: 'µF', get: (p) => p.cdl * 1e6, fmt: (v) => v.toFixed(3), hint: 'Double-layer capacitance of the electrode/electrolyte interface (CPE prefactor Q).',
-    why: 'Falls: a thicker, low-permittivity bacterial layer pushes the charged double layer away from the surface.' },
-  { key: 'warburg', name: 'Warburg σ', unit: 'Ω·s⁻½', get: (p) => p.sigma, fmt: (v) => fmtNum(v), hint: 'Warburg coefficient: diffusion-limited transport of the redox probe to the surface.',
-    why: 'Rises: the bound cells hinder how freely the probe diffuses to the electrode.' },
-  { key: 'zmag', name: '|Z| @ 100 Hz', unit: 'Ω', get: (p) => readout(p).mag, fmt: (v) => fmtNum(v), hint: 'Total impedance magnitude at the reference frequency: a single-number readout.',
-    why: 'Total opposition to the AC current grows as Rct grows: the easiest single number to track.' },
-  { key: 'phase', name: 'Phase @ 100 Hz', unit: '°', get: (p) => readout(p).phase, fmt: (v) => v.toFixed(1), hint: 'Phase lag between voltage and current at the reference frequency.',
-    why: 'The balance between resistive and capacitive behaviour shifts, so the phase angle changes.' },
+  { key: 'rs', name: 'Rs', unit: 'Ω', get: (p) => p.rs, fmt: (v) => fmtNum(v), hint: 'Solution (electrolyte) resistance between the working and counter electrodes — the high-frequency x-intercept of the Nyquist semicircle.',
+    why: 'Barely moves: the bulk electrolyte composition is unchanged by binding, so Rs acts as an internal control (typically tens to a few hundred Ω for a small-volume bandage cell).' },
+  { key: 'rct', name: 'Rct', unit: 'Ω', get: (p) => p.rct, fmt: (v) => fmtNum(v), hint: 'Charge-transfer (interfacial) resistance: how hard it is for a redox probe to exchange electrons with the graphene surface — the Nyquist semicircle diameter.',
+    why: 'Interfacial resistance rises because bound bacteria sterically block the redox probe and insulate the surface. Published graphene/aptamer E. coli biosensors report baseline Rct of ~10²–10³ Ω, growing several-fold on binding — this is the primary detection signal.' },
+  { key: 'cdl', name: 'Cdl', unit: 'µF', get: (p) => p.cdl * 1e6, fmt: (v) => v.toFixed(3), hint: 'Double-layer capacitance at the electrode/electrolyte interface (reported from the constant-phase-element prefactor Q).',
+    why: 'Falls: a thicker, low-permittivity bacterial layer displaces the charged double layer away from the conductive surface, lowering its capacitance — typically a few µF for functionalized graphene electrodes.' },
+  { key: 'warburg', name: 'Warburg σ', unit: 'Ω·s⁻½', get: (p) => p.sigma, fmt: (v) => fmtNum(v), hint: 'Warburg coefficient: diffusion-limited transport of the redox probe to the surface — the ~45° low-frequency tail of the Nyquist plot.',
+    why: 'Rises: bound cells hinder how freely the probe diffuses through the boundary layer to reach the electrode, a secondary (diffusion-related) contributor alongside Rct.' },
+  { key: 'zmag', name: '|Z| @ 100 Hz', unit: 'Ω', get: (p) => readout(p).mag, fmt: (v) => fmtNum(v), hint: 'Total impedance magnitude at the reference frequency: a single-number readout combining all circuit elements.',
+    why: 'Total opposition to the AC current grows as Rct grows: the easiest single number to track without fitting the full spectrum.' },
+  { key: 'phase', name: 'Phase @ 100 Hz', unit: '°', get: (p) => readout(p).phase, fmt: (v) => v.toFixed(1), hint: 'Phase lag between the applied voltage and the resulting current at the reference frequency.',
+    why: 'The balance between resistive (Rct) and capacitive (Cdl) behaviour shifts, so the phase angle moves as bacteria accumulate.' },
 ];
 
 function ParamTable({ state, selected, onSelect }: { state: AssayState; selected: PartKey | null; onSelect: (p: PartKey | null) => void }) {
@@ -459,6 +459,9 @@ function ParamTable({ state, selected, onSelect }: { state: AssayState; selected
       </div>
       <p className="mt-2 text-[11px] text-slate-500">
         ▲ increase · ▼ decrease · ⚑ change beyond the {CALIBRATION.thresholdPct} % detection threshold (3 × {CALIBRATION.noiseSdPct} % baseline noise).
+      </p>
+      <p className="mt-1 text-[11px] text-slate-500">
+        Baseline magnitudes are consistent with published graphene/aptamer EIS biosensors for <em>E. coli</em>: Rct on the order of 10²–10³ Ω before exposure, a few µF of double-layer capacitance, and dRct-based limits of detection in the 1–100 CFU/mL range with linear response extending to ~10⁷–10⁸ CFU/mL.
       </p>
     </section>
   );
@@ -642,13 +645,13 @@ function Detection({ state, dark }: { state: AssayState; dark: boolean }) {
 /* ---------------------------------------------------------------- how it works */
 
 const STEPS: [string, string][] = [
-  ['Baseline characterization', 'Measure the clean graphene-PBASE-aptamer electrode first. This spectrum is the reference every later change is judged against.'],
-  ['Target interaction', 'The sample, possibly containing E. coli, contacts the sensing surface. Bacteria that match the aptamer bind to it (coverage θ = C / (Kd + C)).'],
-  ['Impedance measurement', 'A very small AC voltage (about 10 mV) is swept from 0.1 Hz to 100 kHz and the current response is measured, so the surface is probed without being damaged.'],
-  ['What changes', 'Bound cells block electron transfer (Rct up), add a dielectric layer (Cdl down), hinder diffusion (Warburg σ up) and shift |Z| and phase.'],
-  ['Data interpretation', 'Compare the post-exposure spectrum with the baseline. A significant change relative to a clean control (beyond 3 × the baseline noise) indicates binding.'],
-  ['Equivalent-circuit modelling', 'Fitting Rs — [Cdl ‖ (Rct + W)] turns the spectrum into physical parameters. Rct is the most informative.'],
-  ['Detection output', 'The difference between baseline and post-exposure (ΔRct %) is mapped to concentration through a calibration curve, or reported as below the limit of detection.'],
+  ['Baseline characterization', 'Measure the clean graphene-PBASE-aptamer electrode first. PBASE (1-pyrenebutanoic acid succinimidyl ester) anchors to graphene by π–π stacking of its pyrene ring, while its NHS-ester end covalently couples the aptamer’s amine group — giving a stable, oriented aptamer layer. This baseline spectrum is the reference every later change is judged against.'],
+  ['Target interaction', 'The sample, possibly containing E. coli, contacts the sensing surface. Bacteria that match the aptamer bind to it (coverage θ = C / (Kd + C)), changing the electrical properties at the electrode–electrolyte interface.'],
+  ['Impedance measurement', 'A very small AC voltage (about 10 mV) is swept from 0.1 Hz to 100 kHz and the resulting current is measured, so the surface is probed without being damaged.'],
+  ['What changes', 'Bacterial attachment can alter: interfacial resistance (Rct up — electron transfer is blocked), charge-transfer behaviour, double-layer capacitance (Cdl down — a thicker dielectric layer forms), and diffusion of the redox probe (Warburg σ up) — shifting the overall impedance magnitude and phase.'],
+  ['Data interpretation', 'The post-exposure spectrum is compared with the baseline. A significant change relative to a clean control (beyond 3 × the baseline noise) indicates binding.'],
+  ['Equivalent-circuit modelling', 'Fitting Rs — [Cdl ‖ (Rct + W)] — solution resistance, charge-transfer resistance, double-layer capacitance and a diffusion-related Warburg element — turns the spectrum into physical parameters. Rct is the most informative.'],
+  ['Detection output', 'The difference between baseline and post-exposure (ΔRct %) is mapped to concentration through calibration data, or reported as below the limit of detection.'],
 ];
 
 function HowItWorks() {
@@ -660,6 +663,9 @@ function HowItWorks() {
           <li key={t}><span className="font-semibold text-slate-900 dark:text-slate-100">{t}.</span> {body}</li>
         ))}
       </ol>
+      <p className="mt-3 border-t border-slate-200 pt-2 text-[11px] text-slate-500 dark:border-white/10">
+        Model basis: this simulation follows the standard graphene-aptamer EIS assay reported in the literature — a modified Randles equivalent circuit (Rs, Rct, a constant-phase double layer, Warburg diffusion) fitted to Nyquist/Bode spectra, with Rct as the dominant, most-cited binding signal.
+      </p>
     </details>
   );
 }
