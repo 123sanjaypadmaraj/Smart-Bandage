@@ -101,10 +101,101 @@ export interface TwinGroundTruth {
   timestamp: string;
 }
 
+// DT-3 bandage twin (digital_twin/bandage's BandageTwin, opted into via
+// POST /simulation/start's bandage_design) -- a physically-modelled
+// bandage rather than DT-6's single hidden-state channel. Field names
+// below are the Python side's, verbatim: the conversion into the 3D twin's
+// camelCase AssayState lives in exactly one place (twin3d/useLiveAssay.ts)
+// so these stay a byte-for-byte mirror of the wire.
+
+export interface BandageDesignInfo {
+  name: string;
+  description: string;
+}
+
+/** Randles-circuit parameters as the backend sends them. Same names and
+ * units as twin3d/types.ts's EisParams (cdl in farads, not uF), so these
+ * are structurally interchangeable. */
+export interface TwinEisParams {
+  rs: number;
+  rct: number;
+  cdl: number;
+  sigma: number;
+  n: number;
+}
+
+/** One sweep point, Python naming: `phase_deg` where twin3d's
+ * ImpedancePoint says `phase` (both degrees). */
+export interface TwinEisSpectrumPoint {
+  freq: number;
+  re: number;
+  im: number;
+  mag: number;
+  phase_deg: number;
+}
+
+/** The `eis` body of a twin_eis message -- one channel's latest sweep. */
+export interface TwinEisSnapshot {
+  channel_id: string;
+  /** simulated (physiological) seconds since the twin started */
+  t_s: number;
+  local_concentration_nM: number;
+  theta: number;
+  cfu_equivalent_per_ml: number;
+  baseline_params: TwinEisParams;
+  params: TwinEisParams;
+  spectrum: TwinEisSpectrumPoint[];
+  z_ref: { freq: number; mag: number; phase_deg: number };
+  delta: { z_ref_pct: number; rct_pct: number; cdl_pct: number };
+  detection: { detected: boolean; estimated_cfu: number | null };
+}
+
+/** A twin_eis push minus its `type` tag. Unlike twin_ground_truth this is
+ * a real device measurement, so the backend sends it in production too. */
+export interface TwinEisReading {
+  device_id: string;
+  channel_id: string;
+  timestamp: string;
+  eis: TwinEisSnapshot;
+}
+
+export interface TwinBandageChannelTruth {
+  local_concentration: number;
+  wound_concentration: number;
+  ideal_au: number;
+  sensor_health: number;
+  fouling: number;
+}
+
+/** The hidden physical state behind a bandage twin -- the DT-3 analogue
+ * of TwinGroundTruth. */
+export interface TwinBandageTruthState {
+  bacterial_load: number;
+  inflammation: number;
+  moisture: number;
+  perfusion: number;
+  analytes: Record<string, number>;
+  contact: number;
+  link_quality: number;
+  battery_pct: number;
+  channels: Record<string, TwinBandageChannelTruth>;
+}
+
+/** A twin_bandage_truth push minus its `type` tag. Dev-only, like
+ * twin_ground_truth: the backend never broadcasts it in production. */
+export interface TwinBandageTruth {
+  device_id: string;
+  bandage_design: string;
+  timestamp: string;
+  truth: TwinBandageTruthState;
+}
+
 export type DeviceMessage =
   | { type: "measurement"; measurement: MeasurementRecord }
   | { type: "alert"; alert: AlertItem }
-  | { type: "twin_ground_truth"; ground_truth: TwinGroundTruth };
+  | { type: "twin_ground_truth"; ground_truth: TwinGroundTruth }
+  | ({ type: "twin_eis" } & TwinEisReading)
+  | ({ type: "twin_bandage_truth" } & TwinBandageTruth);
 
 // Phase 10: AI analysis (backend/app/schemas.py, backend/app/routers/ai.py)
 
