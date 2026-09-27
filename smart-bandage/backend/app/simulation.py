@@ -23,24 +23,47 @@ static risk levels this file originally hardcoded plus DT-4's three
 scripted-onset scenarios), so `list_patient_profiles`/`get_patient_profile`
 below are now thin wrappers over it, kept as the stable names
 backend/app/routers/simulation.py already imports.
+
+Bandage-twin mode: a third engine beside those two. POST /simulation/start
+with `bandage_design` (a digital_twin/bandage/design.py PRESETS key) runs
+the physics-based digital_twin.bandage.BandageTwin -- the switch
+docs/architecture/bandage_twin.md had listed under "Limits" as not yet
+wired. The design's electrodes define the device's channels; each tick
+advances the one shared twin by wall-clock dt * time_scale and samples every
+electrode at that same instant (so, like read_in_cycle, all channels share a
+timestamp). Its AFE already emits the final reading -- normalized a.u.,
+100 = a fresh sensor's nominal response -- so its pipelines use the same
+identity calibration as scenario playback rather than DT-6's
+ChannelProfile units. Two WS messages are new and additive: dev-only
+`twin_bandage_truth` (the twin's hidden Truth; DT-6's `twin_ground_truth`
+is left exactly as it was) and `twin_eis` (the aptamer electrode's live
+impedance spectrum -- device output, so not dev-gated) for the dashboard's
+Bandage 3D Twin tab. The scenario and DT-6 paths are unchanged.
 """
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 from backend.app import crud
 from backend.app.alerts import device_error_alert, evaluate_measurement
 from backend.app.config import settings
 from backend.app.database import SessionLocal
 from backend.app.intelligence import IntelligenceEngine
+from backend.app.schemas import TwinBandageTruthMessage, TwinEisMessage
 from backend.app.ws_manager import manager
 from common.schemas.calibration import CalibrationParameters
 from common.schemas.device import DeviceStatus
 from common.schemas.measurement import RawMeasurement
+from digital_twin.bandage.design import PRESETS as BANDAGE_DESIGN_PRESETS
+from digital_twin.bandage.design import BandageDesign
+from digital_twin.bandage.eis_adapter import eis_from_twin
+from digital_twin.bandage.kernel import derive_seed
+from digital_twin.bandage.twin import BandageTwin, TwinFrame
 from digital_twin.observation import DigitalTwinDevice, get_channel_profile
 from digital_twin.profiles import DEFAULT_PROFILE, TwinProfile, get_profile, list_profiles
 from processing.biomarkers.pipeline import ChannelPipeline
@@ -110,6 +133,48 @@ def get_patient_profile(name: str) -> TwinProfile:
         raise KeyError(f"unknown patient profile {name!r} -- choices are {list_profiles()}") from exc
 
 
+# Per-point measurement noise on the live twin_eis spectrum, % of |Z| --
+# the same 1.5 % baseline-noise SD digital_twin/bandage/impedance.py's
+# Calibration assumes when it sets the 3-sigma detection threshold.
+BANDAGE_EIS_NOISE_PCT = 1.5
+
+
+def _eis_channel_ids(design: BandageDesign) -> List[str]:
+    """The electrodes eis_from_twin() can read: aptamer (pathogen-marker) ones."""
+    return [e.channel_id for e in design.electrodes if e.analyte == "pathogen_marker"]
+
+
+def list_bandage_designs() -> List[Dict[str, str]]:
+    """Every digital_twin/bandage/design.py preset -- backs
+    GET /simulation/bandage-designs, the bandage-twin counterpart of
+    list_patient_profiles()."""
+    return [
+        {"name": key, "description": " ".join((factory.__doc__ or factory().name).split())}
+        for key, factory in BANDAGE_DESIGN_PRESETS.items()
+    ]
+
+
+def get_bandage_design(name: str) -> BandageDesign:
+    """A fresh BandageDesign from the named preset -- KeyError (-> 400 in
+    the router) for an unknown name, same shape as get_patient_profile."""
+    factory = BANDAGE_DESIGN_PRESETS.get(name)
+    if factory is None:
+        raise KeyError(f"unknown bandage design {name!r} -- choices are {sorted(BANDAGE_DESIGN_PRESETS)}")
+    return factory()
+
+
+@dataclass(frozen=True)
+class BandageConfig:
+    """What makes one running simulation bandage-twin-backed: the design
+    preset, how many simulated seconds each wall-clock second covers, and
+    the twin's master seed (None -> BandageTwin picks one and keeps it on
+    `.seed`, so a run is still reproducible after the fact)."""
+
+    design: str
+    time_scale: float = 1.0
+    seed: Optional[int] = None
+
+
 @dataclass(frozen=True)
 class TwinConfig:
     """DT-6: what makes one running simulation twin-backed instead of pure
@@ -141,9 +206,10 @@ class TwinGroundTruthSnapshot:
 
 
 class DeviceSimulation:
-    """One running virtual bandage, ticking on a fixed interval: either a
-    MultiChannelSensor (scenario-backed, Phase 4) or a DigitalTwinDevice
-    (twin-backed, DT-6), plus one ChannelPipeline per channel either way."""
+    """One running virtual bandage, ticking on a fixed interval: a
+    MultiChannelSensor (scenario-backed, Phase 4), a DigitalTwinDevice
+    (twin-backed, DT-6) or a BandageTwin (bandage-twin-backed), plus one
+    ChannelPipeline per channel whichever it is."""
 
     def __init__(
         self,
@@ -151,20 +217,40 @@ class DeviceSimulation:
         channel_ids: Iterable[str],
         scenario: str,
         twin: Optional[TwinConfig] = None,
+        bandage: Optional[BandageConfig] = None,
     ) -> None:
+        if twin is not None and bandage is not None:
+            raise ValueError("patient_profile and bandage_design are mutually exclusive -- pick one engine")
         self.device_id = device_id
         self.twin = twin
+        self.bandage = bandage
         self.sensor: Optional[MultiChannelSensor] = None
         self.twin_device: Optional[DigitalTwinDevice] = None
+        self.bandage_twin: Optional[BandageTwin] = None
         self._twin_profile: Optional[TwinProfile] = None
         self._twin_elapsed_days = 0.0
         self._ground_truth_channel_id: Optional[str] = None
         self.last_ground_truth: Optional[TwinGroundTruthSnapshot] = None
+        # bandage-twin mode: the frame sampled on the last tick (readings +
+        # Truth at one instant), and the EIS-capable channels
+        self.last_bandage_frame: Optional[TwinFrame] = None
+        self._eis_channel_ids: List[str] = []
+        self._bandage_ticks = 0
         self._last_tick_time: Optional[float] = None
         self.pipelines: Dict[str, ChannelPipeline]
 
         channel_ids = list(channel_ids)
-        if twin is not None:
+        if bandage is not None:
+            design = get_bandage_design(bandage.design)
+            self.bandage_twin = BandageTwin(design=design, seed=bandage.seed, device_id=device_id)
+            self._eis_channel_ids = _eis_channel_ids(design)
+            # The twin's AFE output is already the device's final reading
+            # (a.u., nominal 100) -- identity calibration, not a second one.
+            self.pipelines = {
+                cid: ChannelPipeline(calibration=_IDENTITY_CALIBRATION, unit="a.u.")
+                for cid in self.bandage_twin.electrodes
+            }
+        elif twin is not None:
             if not channel_ids:
                 raise ValueError("twin-backed simulation requires at least one channel")
             if twin.channel_id is not None and twin.channel_id not in channel_ids:
@@ -193,13 +279,20 @@ class DeviceSimulation:
         self.task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
+    @property
+    def channel_ids(self) -> List[str]:
+        return list(self.pipelines)
+
     def stop(self) -> None:
         self._stop_event.set()
 
     async def run(self, interval_seconds: float, duration: Optional[float]) -> None:
+        # A BandageTwin has no initialize/start/stop lifecycle: it's built
+        # ready to advance(), and a fresh one per run is the only "reset".
         source = self.twin_device or self.sensor
-        source.initialize()
-        source.start_measurement()
+        if source is not None:
+            source.initialize()
+            source.start_measurement()
         self._last_tick_time = time.monotonic()
         start = time.monotonic()
         try:
@@ -212,9 +305,20 @@ class DeviceSimulation:
                 except asyncio.TimeoutError:
                     pass
         finally:
-            source.stop_measurement()
+            if source is not None:
+                source.stop_measurement()
 
     def _read_all(self, dt_wall_seconds: float) -> Dict[str, Union[RawMeasurement, Exception]]:
+        if self.bandage_twin is not None:
+            # One advance for the whole bandage, then every electrode read at
+            # that same instant -- the shared-clock contract read_in_cycle
+            # gives SensorInterface callers, without its one-channel-at-a-time
+            # bookkeeping. sample() already isolates a faulting channel as an
+            # Exception entry, same as MultiChannelSensor.read_all().
+            self.bandage_twin.advance(dt_wall_seconds * self.bandage.time_scale)
+            frame = self.bandage_twin.sample()
+            self.last_bandage_frame = frame
+            return frame.readings
         if self.twin_device is not None:
             dt_seconds = dt_wall_seconds * self.twin.time_scale
             # Apply this profile's scripted perturbations (infection onset,
@@ -230,6 +334,8 @@ class DeviceSimulation:
         return self.sensor.read_all()
 
     def _channel_status(self, channel_id: str) -> DeviceStatus:
+        if self.bandage_twin is not None:
+            return self.bandage_twin.status(channel_id)
         if self.twin_device is not None:
             return self.twin_device.get_status(channel_id)
         return self.sensor.channels[channel_id].get_status()
@@ -300,8 +406,59 @@ class DeviceSimulation:
                                 },
                             },
                         )
+
+            if self.bandage_twin is not None:
+                await self._broadcast_bandage_frame()
         finally:
             db.close()
+
+    # ------------------------------------------------ bandage-twin broadcasts
+    async def _broadcast_bandage_frame(self) -> None:
+        """After the per-channel measurement/alert broadcasts: the twin's
+        hidden Truth (dev-only) and each aptamer electrode's live EIS
+        reading (always -- it's device output), both at the instant this
+        tick sampled."""
+        self._bandage_ticks += 1
+        # Same reasoning as twin_ground_truth's gate above: hidden
+        # physiological/electrode state a real device never reports.
+        if not settings.is_production:
+            truth = self.bandage_truth_message()
+            if truth is not None:
+                await manager.broadcast(self.device_id, truth)
+        for message in self.eis_messages():
+            await manager.broadcast(self.device_id, message)
+
+    def bandage_truth_message(self) -> Optional[Dict[str, Any]]:
+        """The WS "twin_bandage_truth" message for the last sampled frame
+        (schemas.TwinBandageTruthMessage), or None before the first tick."""
+        frame = self.last_bandage_frame
+        if self.bandage is None or frame is None:
+            return None
+        return TwinBandageTruthMessage(
+            device_id=self.device_id,
+            bandage_design=self.bandage.design,
+            timestamp=datetime.now(timezone.utc),
+            truth=dataclasses.asdict(frame.truth),  # nested Analytes/ChannelTruth -> dicts, names unchanged
+        ).model_dump(mode="json")
+
+    def eis_messages(self) -> List[Dict[str, Any]]:
+        """One WS "twin_eis" message (schemas.TwinEisMessage) per aptamer
+        electrode, read off the twin now. The noise seed is derived from the
+        twin's own master seed and a tick counter, so a seeded run's spectra
+        are reproducible yet each tick's noise is fresh."""
+        if self.bandage_twin is None:
+            return []
+        now = datetime.now(timezone.utc)
+        out = []
+        for cid in self._eis_channel_ids:
+            seed = derive_seed(self.bandage_twin.seed, "live-eis", str(self._bandage_ticks)) % (2**63)
+            reading = eis_from_twin(self.bandage_twin, cid, noise_pct=BANDAGE_EIS_NOISE_PCT, seed=seed)
+            out.append(
+                TwinEisMessage(
+                    device_id=self.device_id, channel_id=cid, timestamp=now, eis=reading.to_dict()
+                ).model_dump(mode="json")
+            )
+        return out
 
     def _record_ground_truth(self, channel_id: str, estimated_signal: Optional[float]) -> None:
         assert self.twin_device is not None and self.twin is not None
@@ -340,7 +497,11 @@ class SimulationManager:
         patient_profile: Optional[str] = None,
         time_scale: float = 1.0,
         twin_channel_id: Optional[str] = None,
-    ) -> None:
+        bandage_design: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> DeviceSimulation:
+        if patient_profile and bandage_design:
+            raise ValueError("patient_profile and bandage_design are mutually exclusive -- pick one engine")
         if device_id in self._sims:
             await self.stop(device_id)
 
@@ -352,8 +513,11 @@ class SimulationManager:
             if patient_profile
             else None
         )
+        bandage = (
+            BandageConfig(design=bandage_design, time_scale=time_scale, seed=seed) if bandage_design else None
+        )
 
-        sim = DeviceSimulation(device_id, channel_ids, scenario, twin=twin)
+        sim = DeviceSimulation(device_id, channel_ids, scenario, twin=twin, bandage=bandage)
         self._sims[device_id] = sim
         sim.task = asyncio.create_task(sim.run(interval_seconds, duration))
 
@@ -362,6 +526,10 @@ class SimulationManager:
                 self._sims.pop(device_id, None)
 
         sim.task.add_done_callback(_cleanup)
+        return sim
+
+    def get(self, device_id: str) -> Optional[DeviceSimulation]:
+        return self._sims.get(device_id)
 
     async def stop(self, device_id: str) -> bool:
         sim = self._sims.pop(device_id, None)
@@ -384,6 +552,11 @@ class SimulationManager:
                 f"device {device_id!r} is running in twin-backed mode -- scenario injection isn't "
                 "supported there; its patient_profile drives the physiology instead"
             )
+        if sim.bandage_twin is not None:
+            raise ValueError(
+                f"device {device_id!r} is running in bandage-twin mode -- scenario injection isn't "
+                "supported there; its bandage_design's wound-bed physics drives the readings instead"
+            )
         if channel_id is not None:
             sim.sensor.set_scenario(channel_id, scenario)
         else:
@@ -393,6 +566,12 @@ class SimulationManager:
         sim = self._sims.get(device_id)
         if sim is None:
             return None
+        if sim.bandage_twin is not None:
+            twin = sim.bandage_twin
+            if channel_id is not None:
+                # same KeyError an unknown channel gets from the other engines
+                return twin.status(channel_id)
+            return {cid: twin.status(cid) for cid in twin.electrodes}
         source = sim.twin_device or sim.sensor
         return source.get_status(channel_id)
 

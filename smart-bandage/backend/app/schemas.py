@@ -10,7 +10,7 @@ shapes (auth, simulation control, alerts) get their own models here.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -95,6 +95,26 @@ class SimulationStartRequest(BaseModel):
     twin_channel_id: Optional[_WireId] = Field(
         None, description="twin-backed mode only: which channel the twin drives; defaults to the first of `channels`"
     )
+    # Bandage-twin mode: the physics-based digital_twin.bandage.BandageTwin
+    # (docs/architecture/bandage_twin.md) as a third engine beside scenario
+    # playback and DT-6's DigitalTwinDevice. Mutually exclusive with
+    # patient_profile -- both pick the engine, so the router 400s if both are
+    # set. `time_scale` applies here too; `channels`/`twin_channel_id` don't
+    # (the design's electrodes define the device's channels).
+    bandage_design: Optional[str] = Field(
+        None,
+        description="enables bandage-twin mode: runs digital_twin.bandage.BandageTwin built from this named design "
+        "preset (see GET /simulation/bandage-designs); the design's electrodes replace `channels`. Mutually "
+        "exclusive with patient_profile",
+        examples=["standard", "low_power", "fast_response"],
+    )
+    seed: Optional[int] = Field(
+        None,
+        ge=0,
+        lt=2**63,
+        description="bandage-twin mode only: master seed for the twin's random streams (same design + seed + "
+        "time_scale -> same physics); omit for a fresh random seed",
+    )
 
 
 class SimulationScenarioRequest(BaseModel):
@@ -109,6 +129,128 @@ class PatientProfileInfo(BaseModel):
 
     name: str
     description: str
+
+
+class BandageDesignInfo(BaseModel):
+    """GET /simulation/bandage-designs -- same role and shape as
+    PatientProfileInfo, for digital_twin/bandage/design.py's PRESETS: lets
+    the twin control panel populate its design picker without hardcoding
+    preset names. `name` is what SimulationStartRequest.bandage_design takes."""
+
+    name: str
+    description: str
+
+
+# ---- Bandage-twin WS messages (backend/app/simulation.py, DeviceSimulation._tick) ----
+# Frozen wire contract shared with frontend/src/types.ts. The nested models
+# mirror digital_twin/bandage dataclasses field-for-field (Truth, Analytes,
+# ChannelTruth, EisParams, EisReading.to_dict()) -- they validate what's
+# sent, they don't rename anything.
+
+
+class BandageAnalytes(BaseModel):
+    pathogen_marker: float  # nM
+    glucose: float  # mM
+    pH: float
+    temperature_C: float
+    moisture: float
+
+
+class BandageChannelTruth(BaseModel):
+    local_concentration: float
+    wound_concentration: float
+    ideal_au: float
+    sensor_health: float
+    fouling: float
+
+
+class BandageTruthState(BaseModel):
+    """dataclasses.asdict(digital_twin.bandage.twin.Truth)."""
+
+    bacterial_load: float
+    inflammation: float
+    moisture: float
+    perfusion: float
+    analytes: BandageAnalytes
+    contact: float
+    link_quality: float
+    battery_pct: float
+    channels: Dict[str, BandageChannelTruth]
+
+
+class TwinBandageTruthMessage(BaseModel):
+    """WS "twin_bandage_truth" -- dev-only (never broadcast when
+    Settings.is_production, same gate as twin_ground_truth): the bandage
+    twin's hidden state at the instant this tick sampled. Deliberately a
+    separate message from DT-6's twin_ground_truth, whose
+    patient_profile/time_scale/one-channel shape doesn't fit this engine."""
+
+    type: Literal["twin_bandage_truth"] = "twin_bandage_truth"
+    device_id: _WireId
+    bandage_design: str = Field(..., description="the preset key the simulation was started with")
+    timestamp: datetime
+    truth: BandageTruthState
+
+
+class EisParamsPayload(BaseModel):
+    rs: float
+    rct: float
+    cdl: float
+    sigma: float
+    n: float
+
+
+class EisSpectrumPoint(BaseModel):
+    freq: float
+    re: float
+    im: float
+    mag: float
+    phase_deg: float  # the dashboard maps this to twin3d ImpedancePoint.phase
+
+
+class EisZRef(BaseModel):
+    freq: float
+    mag: float
+    phase_deg: float
+
+
+class EisDelta(BaseModel):
+    z_ref_pct: float
+    rct_pct: float
+    cdl_pct: float
+
+
+class EisDetection(BaseModel):
+    detected: bool
+    estimated_cfu: Optional[float]
+
+
+class EisReadingPayload(BaseModel):
+    """digital_twin.bandage.eis_adapter.EisReading.to_dict()."""
+
+    channel_id: _WireId
+    t_s: float
+    local_concentration_nM: float
+    theta: float
+    cfu_equivalent_per_ml: float
+    baseline_params: EisParamsPayload
+    params: EisParamsPayload
+    spectrum: List[EisSpectrumPoint]
+    z_ref: EisZRef
+    delta: EisDelta
+    detection: EisDetection
+
+
+class TwinEisMessage(BaseModel):
+    """WS "twin_eis" -- one per aptamer (pathogen-marker) channel per tick.
+    Not dev-gated: the impedance spectrum and derived Rct/Cdl/detection are
+    what an EIS-reading bandage would actually report, not hidden state."""
+
+    type: Literal["twin_eis"] = "twin_eis"
+    device_id: _WireId
+    channel_id: _WireId
+    timestamp: datetime
+    eis: EisReadingPayload
 
 
 class TwinGroundTruth(BaseModel):

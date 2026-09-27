@@ -600,3 +600,287 @@ def test_websocket_receives_twin_ground_truth_broadcast(client, auth_headers):
             assert "twin_ground_truth" in seen_types
     finally:
         client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+# ---- Bandage-twin mode: digital_twin.bandage.BandageTwin as a third engine ----
+
+
+def _wait_for(predicate, timeout=4.0, poll=0.05):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(poll)
+    return predicate()
+
+
+def test_bandage_designs_are_listed_without_auth(client):
+    resp = client.get("/simulation/bandage-designs")
+    assert resp.status_code == 200
+    designs = resp.json()
+    assert [d["name"] for d in designs] == ["standard", "low_power", "fast_response"]
+    for d in designs:
+        assert set(d) == {"name", "description"}  # same shape as /patient-profiles
+        assert d["description"]
+
+
+def test_bandage_simulation_start_rejects_patient_profile_and_design_together(client, auth_headers):
+    resp = client.post(
+        "/simulation/start",
+        json={"device_id": "SB-900", "patient_profile": "healthy_baseline", "bandage_design": "standard"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert "mutually exclusive" in resp.json()["detail"]
+    assert simulation_manager.is_running("SB-900") is False
+
+
+def test_bandage_simulation_start_rejects_unknown_design(client, auth_headers):
+    resp = client.post(
+        "/simulation/start",
+        json={"device_id": "SB-901", "bandage_design": "no-such-design"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert client.get("/devices/SB-901").status_code == 404  # rejected before registering anything
+
+
+def test_bandage_simulation_start_stop_stores_every_design_channel(client, auth_headers):
+    """bandage_design drives BandageTwin through the same measurement
+    pipeline; the device gets the design's channels (not `channels`), each
+    stored with the twin's a.u. reading, and /stop ends it."""
+    device_id = "SB-902"
+    start = client.post(
+        "/simulation/start",
+        json={
+            "device_id": device_id,
+            "channels": ["CH-01"],  # ignored: the design defines the channels
+            "bandage_design": "standard",
+            "time_scale": 600.0,
+            "seed": 7,
+        },
+        headers=auth_headers,
+    )
+    assert start.status_code == 202, start.text
+    body = start.json()
+    assert body["twin"] is False  # DT-6 flag keeps its meaning
+    assert body["bandage_design"] == "standard"
+    assert body["channels"] == ["CH-01", "CH-02", "CH-03"]
+    assert body["seed"] == 7
+    assert simulation_manager.get(device_id).bandage_twin is not None
+
+    try:
+        registered = client.get(f"/devices/{device_id}").json()
+        assert sorted(registered["channels"]) == ["CH-01", "CH-02", "CH-03"]
+
+        def all_channels_stored():
+            ms = client.get("/measurements", params={"device_id": device_id}).json()
+            return ms if {m["channel_id"] for m in ms} >= {"CH-01", "CH-02", "CH-03"} else None
+
+        measurements = _wait_for(all_channels_stored)
+        assert measurements, "bandage twin never stored a measurement on every channel"
+        assert {m["unit"] for m in measurements if m["unit"]} == {"a.u."}
+
+        status = client.get("/device-status", params={"device_id": device_id, "channel_id": "CH-02"})
+        assert status.status_code == 200 and status.json()["battery"] is not None
+    finally:
+        stop = client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+    assert stop.status_code == 202
+    assert simulation_manager.is_running(device_id) is False
+
+
+def test_bandage_simulation_adds_design_channels_to_an_existing_device(client, auth_headers):
+    device_id = "SB-903"
+    client.post(
+        "/devices/register",
+        json={"device_id": device_id, "name": "Proto", "firmware_version": "0.1.0", "channels": ["CH-01"]},
+        headers=auth_headers,
+    )
+    start = client.post(
+        "/simulation/start", json={"device_id": device_id, "bandage_design": "standard"}, headers=auth_headers
+    )
+    try:
+        assert start.status_code == 202, start.text
+        device = client.get(f"/devices/{device_id}").json()
+        assert device["name"] == "Proto"  # untouched
+        assert sorted(device["channels"]) == ["CH-01", "CH-02", "CH-03"]
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+def test_bandage_simulation_rejects_scenario_injection(client, auth_headers):
+    device_id = "SB-904"
+    client.post("/simulation/start", json={"device_id": device_id, "bandage_design": "standard"}, headers=auth_headers)
+    try:
+        resp = client.post(
+            "/simulation/scenario", json={"device_id": device_id, "scenario": "normal"}, headers=auth_headers
+        )
+        assert resp.status_code == 409
+        assert "bandage-twin" in resp.json()["detail"]
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+
+def test_websocket_receives_bandage_truth_and_live_eis(client, auth_headers):
+    device_id = "SB-905"
+    client.post(
+        "/simulation/start",
+        json={"device_id": device_id, "bandage_design": "fast_response", "time_scale": 600.0, "seed": 3},
+        headers=auth_headers,
+    )
+    try:
+        with client.websocket_connect(f"/ws/devices/{device_id}") as ws:
+            seen = {}
+            for _ in range(40):
+                message = ws.receive_json()
+                seen.setdefault(message["type"], message)
+                if {"twin_bandage_truth", "twin_eis", "measurement"} <= set(seen):
+                    break
+    finally:
+        client.post("/simulation/stop", params={"device_id": device_id}, headers=auth_headers)
+
+    assert "twin_ground_truth" not in seen  # DT-6's message is not reused
+    truth_msg = seen["twin_bandage_truth"]
+    assert set(truth_msg) == {"type", "device_id", "bandage_design", "timestamp", "truth"}
+    assert truth_msg["device_id"] == device_id
+    assert truth_msg["bandage_design"] == "fast_response"
+    truth = truth_msg["truth"]
+    assert set(truth) == {
+        "bacterial_load", "inflammation", "moisture", "perfusion", "analytes",
+        "contact", "link_quality", "battery_pct", "channels",
+    }
+    assert set(truth["channels"]) == {"CH-01", "CH-02", "CH-03"}
+    assert set(truth["channels"]["CH-01"]) == {
+        "local_concentration", "wound_concentration", "ideal_au", "sensor_health", "fouling"
+    }
+    assert set(truth["analytes"]) == {"pathogen_marker", "glucose", "pH", "temperature_C", "moisture"}
+    for key in ("bacterial_load", "inflammation", "moisture", "perfusion", "contact", "link_quality", "battery_pct"):
+        assert isinstance(truth[key], float)
+
+    eis_msg = seen["twin_eis"]
+    assert set(eis_msg) == {"type", "device_id", "channel_id", "timestamp", "eis"}
+    assert eis_msg["device_id"] == device_id and eis_msg["channel_id"] == "CH-01"
+    eis = eis_msg["eis"]
+    assert set(eis) == {
+        "channel_id", "t_s", "local_concentration_nM", "theta", "cfu_equivalent_per_ml",
+        "baseline_params", "params", "spectrum", "z_ref", "delta", "detection",
+    }
+    assert eis["channel_id"] == "CH-01"
+    assert set(eis["baseline_params"]) == {"rs", "rct", "cdl", "sigma", "n"}
+    assert set(eis["detection"]) == {"detected", "estimated_cfu"}
+    assert len(eis["spectrum"]) == 61  # 0.1 Hz..100 kHz, 10/decade
+    assert set(eis["spectrum"][0]) == {"freq", "re", "im", "mag", "phase_deg"}
+    assert set(eis["params"]) == {"rs", "rct", "cdl", "sigma", "n"}
+    assert eis["z_ref"]["freq"] == 100.0
+    assert set(eis["delta"]) == {"z_ref_pct", "rct_pct", "cdl_pct"}
+    assert isinstance(eis["detection"]["detected"], bool)
+    assert 0.0 <= eis["theta"] <= 1.0
+
+
+# ---- Bandage-twin mode: DeviceSimulation unit tests (no event loop / DB) ----
+
+
+def _bandage_sim(device_id="SB-910", seed=11, time_scale=30.0, design="standard"):
+    from backend.app.simulation import BandageConfig, DeviceSimulation
+
+    return DeviceSimulation(
+        device_id, ["ignored"], "normal", bandage=BandageConfig(design=design, time_scale=time_scale, seed=seed)
+    )
+
+
+def test_bandage_sim_reads_every_channel_at_one_shared_instant():
+    sim = _bandage_sim()
+    twin = sim.bandage_twin
+    assert sim.channel_ids == ["CH-01", "CH-02", "CH-03"]
+    assert sim.sensor is None and sim.twin_device is None
+
+    first = sim._read_all(0.0)
+    assert set(first) == {"CH-01", "CH-02", "CH-03"}
+    assert {r.timestamp for r in first.values()} == {twin.timestamp}
+    assert sim.last_bandage_frame.readings is first
+
+    second = sim._read_all(2.0)  # 2 wall seconds * time_scale 30 = 60 simulated seconds
+    assert twin.t_s == pytest.approx(60.0)
+    assert sim.last_bandage_frame.t_s == twin.t_s
+    assert {r.timestamp for r in second.values()} == {twin.timestamp}
+    delta = next(iter(second.values())).timestamp - next(iter(first.values())).timestamp
+    assert delta.total_seconds() == pytest.approx(60.0)
+
+    # status comes from the same twin
+    assert sim._channel_status("CH-02") == twin.status("CH-02")
+
+
+def test_bandage_sim_is_reproducible_for_a_seed():
+    a, b = _bandage_sim(seed=5), _bandage_sim(seed=5)
+    for dt in (0.0, 1.0, 3.5, 1.0):
+        ra, rb = a._read_all(dt), b._read_all(dt)
+        assert {k: v.raw_signal for k, v in ra.items()} == {k: v.raw_signal for k, v in rb.items()}
+    assert a.eis_messages()[0]["eis"]["spectrum"] == b.eis_messages()[0]["eis"]["spectrum"]
+
+
+def test_bandage_sim_rejects_both_engines():
+    from backend.app.simulation import BandageConfig, DeviceSimulation, TwinConfig
+
+    with pytest.raises(ValueError):
+        DeviceSimulation("SB-911", ["CH-01"], "normal", twin=TwinConfig(), bandage=BandageConfig(design="standard"))
+
+
+def test_bandage_truth_message_matches_the_sampled_frame():
+    import dataclasses
+
+    sim = _bandage_sim()
+    assert sim.bandage_truth_message() is None  # nothing sampled yet
+    sim._read_all(0.0)
+    sim._read_all(10.0)
+    message = sim.bandage_truth_message()
+    assert message["type"] == "twin_bandage_truth"
+    assert message["bandage_design"] == "standard"
+    # exactly dataclasses.asdict(Truth): no renamed, dropped or extra fields
+    assert message["truth"] == dataclasses.asdict(sim.last_bandage_frame.truth)
+
+
+def test_bandage_eis_message_tracks_the_twin_and_refreshes_noise_each_tick():
+    from digital_twin.bandage.eis_adapter import eis_from_twin
+
+    sim = _bandage_sim()
+    sim._read_all(0.0)
+    sim._read_all(20.0)
+    first = sim.eis_messages()
+    assert [(m["type"], m["channel_id"]) for m in first] == [("twin_eis", "CH-01")]
+    eis = first[0]["eis"]
+    # exactly EisReading.to_dict() (noise only touches the spectrum)
+    expected = eis_from_twin(sim.bandage_twin, "CH-01").to_dict()
+    assert set(eis) == set(expected)
+    for key in ("t_s", "theta", "local_concentration_nM", "params", "baseline_params", "delta", "detection"):
+        assert eis[key] == expected[key]
+    assert eis["t_s"] == sim.bandage_twin.t_s
+    sim._bandage_ticks += 1  # what _broadcast_bandage_frame does per tick
+    second = sim.eis_messages()
+    assert second[0]["eis"]["params"] == eis["params"]  # same instant, same noise-free physics
+    assert second[0]["eis"]["spectrum"] != eis["spectrum"]  # fresh measurement noise
+
+
+def test_bandage_truth_is_not_broadcast_in_production_but_eis_is(monkeypatch):
+    import asyncio
+
+    from backend.app import simulation as simulation_module
+    from backend.app.config import Settings
+
+    sent = []
+
+    async def fake_broadcast(device_id, payload):
+        sent.append(payload["type"])
+
+    monkeypatch.setattr(simulation_module.manager, "broadcast", fake_broadcast)
+    sim = _bandage_sim()
+    sim._read_all(0.0)
+
+    monkeypatch.setattr(simulation_module, "settings", Settings(environment="production"))
+    asyncio.run(sim._broadcast_bandage_frame())
+    assert sent == ["twin_eis"]
+
+    sent.clear()
+    monkeypatch.setattr(simulation_module, "settings", Settings(environment="development"))
+    asyncio.run(sim._broadcast_bandage_frame())
+    assert sent == ["twin_bandage_truth", "twin_eis"]

@@ -1,4 +1,18 @@
-"""WS /ws/devices/{device_id} (Blueprint API §6 "Realtime")."""
+"""WS /ws/devices/{device_id} (Blueprint API §6 "Realtime").
+
+Server -> client only; every message is a JSON object with a `type`
+(mirrored by frontend/src/types.ts DeviceMessage):
+
+  measurement         {"measurement": MeasurementRecord}
+  alert               {"alert": Alert}
+  twin_ground_truth   {"ground_truth": TwinGroundTruth}                 DT-6, dev only
+  twin_bandage_truth  schemas.TwinBandageTruthMessage                   bandage twin, dev only
+                      {device_id, bandage_design, timestamp, truth}
+  twin_eis            schemas.TwinEisMessage                            bandage twin, one per
+                      {device_id, channel_id, timestamp, eis}           aptamer channel per tick
+
+All are sent by backend/app/simulation.py's DeviceSimulation._tick; this
+router only holds the socket open. Clients should ignore unknown types."""
 from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
