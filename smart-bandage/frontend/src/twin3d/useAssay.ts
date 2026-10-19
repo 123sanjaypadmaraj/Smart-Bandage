@@ -21,8 +21,14 @@ export interface AssayControls {
 }
 
 const AUTO_RESTART_DELAY_S = 4;
+/** React state is refreshed at most this often; the controller itself still ticks every frame. */
+const SYNC_INTERVAL_S = 1 / 30;
 
-/** Drives an AssayController from requestAnimationFrame; ticking stops while the tab is hidden. */
+/**
+ * Drives an AssayController from requestAnimationFrame; ticking stops while the tab is hidden.
+ * The controller keeps acquiring after the scripted steps finish (live monitoring), so this
+ * loop publishes state for as long as the assay is started and not paused.
+ */
 export function useAssay(): { state: AssayState; controls: AssayControls } {
   const ctrlRef = useRef<AssayController | null>(null);
   if (ctrlRef.current === null) ctrlRef.current = new AssayController();
@@ -37,6 +43,7 @@ export function useAssay(): { state: AssayState; controls: AssayControls } {
   const autoRef = useRef(false);
   const dirty = useRef(false);
   const finishedFor = useRef(0);
+  const sinceSync = useRef(0);
 
   const sync = useCallback(() => {
     setState(ctrl.getState());
@@ -65,8 +72,10 @@ export function useAssay(): { state: AssayState; controls: AssayControls } {
       } else {
         finishedFor.current = 0;
       }
-      if (wasRunning || dirty.current) {
+      sinceSync.current += dt;
+      if (dirty.current || (wasRunning && sinceSync.current >= SYNC_INTERVAL_S)) {
         dirty.current = false;
+        sinceSync.current = 0;
         sync();
       }
     };

@@ -91,6 +91,32 @@ export interface AssayState {
   /** estimated concentration from the calibration curve, CFU/mL (null if below LOD) */
   estimatedCfuPerMl: number | null;
   stale: boolean;               // feed stalled -> scene freezes motion
+  /** live-instrument telemetry (optional: absent on frames from a source that has none) */
+  live?: LiveTelemetry;
+}
+
+/** One sample of the live sensorgram (time series of the detection signal). */
+export interface TracePoint {
+  t: number;        // lab time, seconds since the assay / feed started
+  dRctPct: number;  // dRct% as read at that instant (includes readout noise)
+  zMag: number;     // |Z| at REF_FREQ_HZ, ohm
+  theta: number;    // aptamer occupancy 0..1
+}
+
+/** What a potentiostat front panel shows while it runs: the sweep in progress and the running time series. */
+export interface LiveTelemetry {
+  /** sweeps completed since the assay started (0 = first sweep in progress) */
+  sweepIndex: number;
+  /** 0..1 through the sweep in progress (sweeps run high -> low frequency) */
+  sweepProgress: number;
+  /** frequency being measured right now, Hz (null when the source does not report it) */
+  sweepFreqHz: number | null;
+  /** lab time, seconds: the assay clock a bench run would show (the browser assay time-compresses it) */
+  labTimeS: number;
+  /** true once the scripted steps are over and the sensor is simply being watched */
+  monitoring: boolean;
+  /** rolling sensorgram; a new array only when a sample is appended */
+  trace: TracePoint[];
 }
 
 export const REF_FREQ_HZ = 100;

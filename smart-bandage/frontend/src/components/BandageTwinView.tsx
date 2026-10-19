@@ -116,7 +116,7 @@ export function BandageTwinView({ live }: Props) {
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid gap-4 lg:grid-cols-2">
         <div className="lg:sticky lg:top-4 lg:self-start">
           <BandageTwin3D
             state={state}

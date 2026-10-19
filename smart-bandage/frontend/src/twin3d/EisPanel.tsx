@@ -9,6 +9,7 @@ import type { AssayControls } from './useAssay';
 import {
   CALIBRATION, DEFAULTS, calibratedDeltaRctPct, coverage, deltaPct, effectiveLodCfu, impedance, logSweep, readout,
 } from './eis';
+import { REFERENCE_LABEL, REFERENCE_SOURCES, REFERENCE_SPECTRUM } from './referenceData';
 import { ASSAY_PHASES, PHASE_LABEL, REF_FREQ_HZ } from './types';
 import type { AssayPhase, AssayState, EisParams, EisSpectrum, PartKey } from './types';
 
@@ -78,11 +79,12 @@ function useIsDark(): boolean {
   return dark;
 }
 
-interface Palette { base: string; post: string; axis: string; grid: string; thr: string; tipBg: string; tipBorder: string }
+interface Palette { base: string; post: string; ref: string; axis: string; grid: string; thr: string; tipBg: string; tipBorder: string }
 function palette(dark: boolean): Palette {
   return {
     base: dark ? '#818cf8' : '#4338ca',
     post: dark ? '#fb923c' : '#c2410c',
+    ref: dark ? '#2dd4bf' : '#0f766e',
     axis: dark ? '#a1a1aa' : '#52525b',
     grid: 'rgba(113,113,122,0.2)',
     thr: dark ? '#fda4af' : '#be123c',
@@ -184,7 +186,7 @@ function Workflow({ state, controls }: { state: AssayState; controls: AssayContr
         {controls.paused ? (
           <button type="button" className={BTN} onClick={controls.resume} disabled={idle}>Resume</button>
         ) : (
-          <button type="button" className={BTN} onClick={controls.pause} disabled={idle || controls.finished}>Pause</button>
+          <button type="button" className={BTN} onClick={controls.pause} disabled={idle}>Pause</button>
         )}
         <button type="button" className={BTN} onClick={controls.reset} disabled={idle}>Reset</button>
         <div role="group" aria-label="Simulation speed" className="ml-auto flex items-center gap-1 text-xs text-slate-500">
@@ -251,7 +253,7 @@ function Workflow({ state, controls }: { state: AssayState; controls: AssayContr
 interface ChartData {
   nyqBase: { x: number; y: number }[];
   nyqPost: { x: number; y: number }[];
-  bode: { f: number; magBase: number | null; magPost: number | null; phBase: number | null; phPost: number | null }[];
+  bode: { f: number; magBase: number | null; magPost: number | null; phBase: number | null; phPost: number | null; magRef: number | null; phRef: number | null }[];
   span: number;
   magDomain: [number, number];
   magTicks: number[];
@@ -259,7 +261,7 @@ interface ChartData {
   hasPost: boolean;
 }
 
-function buildChartData(state: AssayState): ChartData {
+function buildChartData(state: AssayState, showRef: boolean): ChartData {
   const idx = phaseIndex(state.phase);
   let baseSpec: EisSpectrum | null = state.baselineSpectrum;
   // during the baseline measurement the sweep is revealed high -> low frequency
@@ -275,14 +277,16 @@ function buildChartData(state: AssayState): ChartData {
   const bode = freqs.map((f, i) => {
     const b = baseSpec ? baseSpec.find((p) => Math.abs(Math.log10(p.freq / f)) < 1e-6) : undefined;
     const q = postSpec ? postSpec[i] : undefined;
-    return { f, magBase: b ? b.mag : null, magPost: q ? q.mag : null, phBase: b ? b.phase : null, phPost: q ? q.phase : null };
+    // the published spectrum is stored on this same grid (as far up as it goes)
+    const r = showRef ? REFERENCE_SPECTRUM[i] : undefined;
+    return { f, magBase: b ? b.mag : null, magPost: q ? q.mag : null, phBase: b ? b.phase : null, phPost: q ? q.phase : null, magRef: r ? r.mag : null, phRef: r ? r.phase : null };
   });
 
   const all = [...(baseSpec ?? []), ...(postSpec ?? [])];
   const maxRe = all.reduce((m, p) => Math.max(m, p.re), 0);
   const maxIm = all.reduce((m, p) => Math.max(m, -p.im), 0);
   const span = niceCeil(Math.max(maxRe, maxIm, 500) * 1.05);
-  const mags = all.map((p) => p.mag);
+  const mags = [...all, ...(showRef ? REFERENCE_SPECTRUM : [])].map((p) => p.mag);
   const lo = mags.length ? Math.pow(10, Math.floor(Math.log10(Math.min(...mags) * 0.95))) : 100;
   const hi = mags.length ? Math.pow(10, Math.ceil(Math.log10(Math.max(...mags) * 1.02))) : 10000;
   const magTicks: number[] = [];
@@ -290,15 +294,19 @@ function buildChartData(state: AssayState): ChartData {
   return { nyqBase: nyq(baseSpec), nyqPost: nyq(postSpec), bode, span, magDomain: [lo, hi], magTicks, hasBase: !!baseSpec, hasPost: !!postSpec };
 }
 
-function Charts({ state, dark }: { state: AssayState; dark: boolean }) {
+function Charts({ state, dark, showRef }: { state: AssayState; dark: boolean; showRef: boolean }) {
   const c = palette(dark);
-  const d = useMemo(() => buildChartData(state), [state.baselineSpectrum, state.currentSpectrum, state.phase, state.phaseProgress]); // eslint-disable-line react-hooks/exhaustive-deps
+  const d = useMemo(() => buildChartData(state, showRef), [state.baselineSpectrum, state.currentSpectrum, state.phase, state.phaseProgress, showRef]); // eslint-disable-line react-hooks/exhaustive-deps
   const tick = { fontSize: 10, fill: c.axis };
   const label = (value: string, angle?: number) => ({ value, fill: c.axis, fontSize: 10, angle, position: angle ? ('insideLeft' as const) : ('insideBottom' as const), offset: angle ? 10 : -2 });
-  const empty = !d.hasBase && !d.hasPost;
+  const empty = !d.hasBase && !d.hasPost && !showRef;
   const fRefTicks = [0.1, 1, 10, 100, 1e3, 1e4, 1e5];
   const refBase = state.baseline ? impedance(REF_FREQ_HZ, state.baseline) : null;
   const refPost = phaseIndex(state.phase) >= phaseIndex('binding') ? impedance(REF_FREQ_HZ, state.current) : null;
+  // the point the analyser is measuring right now (sweeps run high -> low frequency)
+  const sweepF = state.stale ? null : state.live?.sweepFreqHz ?? null;
+  const sweepPt = sweepF === null ? undefined : state.currentSpectrum.find((p) => Math.abs(Math.log10(p.freq / sweepF)) < 1e-6);
+  const sweepColor = state.phase === 'baseline' ? c.base : c.post;
 
   const legend = (
     <Legend
@@ -306,6 +314,7 @@ function Charts({ state, dark }: { state: AssayState; dark: boolean }) {
         { label: 'Baseline (clean electrode)', color: c.base, shape: 'circle' },
         { label: 'Post-exposure', color: c.post, shape: 'diamond', dashed: true },
         { label: `● ${REF_FREQ_HZ} Hz readout`, color: c.axis, shape: 'line' },
+        ...(showRef ? [{ label: `${REFERENCE_LABEL}, Bode only`, color: c.ref, shape: 'line' as const }] : []),
       ]}
     />
   );
@@ -339,6 +348,7 @@ function Charts({ state, dark }: { state: AssayState; dark: boolean }) {
                   <Scatter name="Post-exposure" data={d.nyqPost} fill={c.post} shape="diamond" line={{ stroke: c.post, strokeWidth: 2, strokeDasharray: '6 3' }} lineType="joint" isAnimationActive={false} />
                   {refBase && <ReferenceDot x={refBase.re} y={-refBase.im} r={6} fill="none" stroke={c.base} strokeWidth={2.5} ifOverflow="hidden" />}
                   {refPost && <ReferenceDot x={refPost.re} y={-refPost.im} r={6} fill="none" stroke={c.post} strokeWidth={2.5} ifOverflow="hidden" />}
+                  {sweepPt && <ReferenceDot x={sweepPt.re} y={-sweepPt.im} r={4.5} fill={sweepColor} stroke={dark ? '#0a0a0d' : '#ffffff'} strokeWidth={1.5} ifOverflow="hidden" />}
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
@@ -366,6 +376,8 @@ function Charts({ state, dark }: { state: AssayState; dark: boolean }) {
                         formatter={(v) => (typeof v === 'number' ? v.toFixed(kind === 'mag' ? 0 : 1) : String(v))}
                       />
                       <ReferenceLine x={REF_FREQ_HZ} stroke={c.axis} strokeDasharray="2 3" label={{ value: '100 Hz', fill: c.axis, fontSize: 9, position: 'insideTopRight' }} />
+                      {sweepF !== null && <ReferenceLine x={sweepF} stroke={sweepColor} strokeWidth={1.5} strokeOpacity={0.7} />}
+                      {showRef && <Line type="monotone" dataKey={kind === 'mag' ? 'magRef' : 'phRef'} name="Published" stroke={c.ref} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls={false} />}
                       <Line type="monotone" dataKey={kind === 'mag' ? 'magBase' : 'phBase'} name="Baseline" stroke={c.base} strokeWidth={2} dot={{ r: 1.5, fill: c.base }} isAnimationActive={false} connectNulls={false} />
                       <Line type="monotone" dataKey={kind === 'mag' ? 'magPost' : 'phPost'} name="Post-exposure" stroke={c.post} strokeWidth={2} strokeDasharray="6 3" dot={false} isAnimationActive={false} connectNulls={false} />
                     </LineChart>
@@ -391,22 +403,48 @@ interface Row {
   fmt: (v: number) => string;
   why: string;
   hint: string;
+  nominal: string;
 }
 
 const ROWS: Row[] = [
   { key: 'rs', name: 'Rs', unit: 'Ω', get: (p) => p.rs, fmt: (v) => fmtNum(v), hint: 'Solution (electrolyte) resistance between the working and counter electrodes — the high-frequency x-intercept of the Nyquist semicircle.',
-    why: 'Barely moves: the bulk electrolyte composition is unchanged by binding, so Rs acts as an internal control (typically tens to a few hundred Ω for a small-volume bandage cell).' },
+    why: 'Barely moves: the bulk electrolyte composition is unchanged by binding, so Rs acts as an internal control (typically tens to a few hundred Ω for a small-volume bandage cell).',
+    nominal: 'Tens to a few hundred Ω, essentially flat before and after exposure — used as an internal control.' },
   { key: 'rct', name: 'Rct', unit: 'Ω', get: (p) => p.rct, fmt: (v) => fmtNum(v), hint: 'Charge-transfer (interfacial) resistance: how hard it is for a redox probe to exchange electrons with the graphene surface — the Nyquist semicircle diameter.',
-    why: 'Interfacial resistance rises because bound bacteria sterically block the redox probe and insulate the surface. Published graphene/aptamer E. coli biosensors report baseline Rct of ~10²–10³ Ω, growing several-fold on binding — this is the primary detection signal.' },
+    why: 'Interfacial resistance rises because bound bacteria sterically block the redox probe and insulate the surface. Published graphene/aptamer E. coli biosensors report baseline Rct of ~10²–10³ Ω, growing several-fold on binding — this is the primary detection signal.',
+    nominal: '~10²–10³ Ω clean baseline; a rise beyond the detection threshold flags binding.' },
   { key: 'cdl', name: 'Cdl', unit: 'µF', get: (p) => p.cdl * 1e6, fmt: (v) => v.toFixed(3), hint: 'Double-layer capacitance at the electrode/electrolyte interface (reported from the constant-phase-element prefactor Q).',
-    why: 'Falls: a thicker, low-permittivity bacterial layer displaces the charged double layer away from the conductive surface, lowering its capacitance — typically a few µF for functionalized graphene electrodes.' },
+    why: 'Falls: a thicker, low-permittivity bacterial layer displaces the charged double layer away from the conductive surface, lowering its capacitance — typically a few µF for functionalized graphene electrodes.',
+    nominal: 'A few µF clean baseline; falls as bacterial fouling thickens the interface.' },
   { key: 'warburg', name: 'Warburg σ', unit: 'Ω·s⁻½', get: (p) => p.sigma, fmt: (v) => fmtNum(v), hint: 'Warburg coefficient: diffusion-limited transport of the redox probe to the surface — the ~45° low-frequency tail of the Nyquist plot.',
-    why: 'Rises: bound cells hinder how freely the probe diffuses through the boundary layer to reach the electrode, a secondary (diffusion-related) contributor alongside Rct.' },
+    why: 'Rises: bound cells hinder how freely the probe diffuses through the boundary layer to reach the electrode, a secondary (diffusion-related) contributor alongside Rct.',
+    nominal: 'Rises modestly alongside Rct as diffusion becomes hindered; no fixed clean-baseline range.' },
   { key: 'zmag', name: '|Z| @ 100 Hz', unit: 'Ω', get: (p) => readout(p).mag, fmt: (v) => fmtNum(v), hint: 'Total impedance magnitude at the reference frequency: a single-number readout combining all circuit elements.',
-    why: 'Total opposition to the AC current grows as Rct grows: the easiest single number to track without fitting the full spectrum.' },
+    why: 'Total opposition to the AC current grows as Rct grows: the easiest single number to track without fitting the full spectrum.',
+    nominal: 'Tracks Rct — rises with binding; flagged once the change exceeds the detection threshold.' },
   { key: 'phase', name: 'Phase @ 100 Hz', unit: '°', get: (p) => readout(p).phase, fmt: (v) => v.toFixed(1), hint: 'Phase lag between the applied voltage and the resulting current at the reference frequency.',
-    why: 'The balance between resistive (Rct) and capacitive (Cdl) behaviour shifts, so the phase angle moves as bacteria accumulate.' },
+    why: 'The balance between resistive (Rct) and capacitive (Cdl) behaviour shifts, so the phase angle moves as bacteria accumulate.',
+    nominal: 'Shifts a few degrees as the resistive/capacitive balance changes with binding.' },
 ];
+
+type Tone = 'ok' | 'bad' | 'neutral';
+
+const TONE_TEXT: Record<Tone, string> = {
+  ok: 'text-emerald-600 dark:text-emerald-300',
+  bad: 'text-rose-600 dark:text-rose-300 font-bold',
+  neutral: 'text-slate-800 dark:text-slate-100',
+};
+
+const TONE_GLOW: Record<Tone, string> = {
+  ok: 'drop-shadow-[0_0_5px_rgba(16,185,129,0.55)]',
+  bad: 'drop-shadow-[0_0_5px_rgba(244,63,94,0.6)]',
+  neutral: '',
+};
+
+function deltaTone(dl: number | null, flag: boolean): Tone {
+  if (dl === null) return 'neutral';
+  return flag ? 'bad' : 'ok';
+}
 
 function ParamTable({ state, selected, onSelect }: { state: AssayState; selected: PartKey | null; onSelect: (p: PartKey | null) => void }) {
   const showPost = phaseIndex(state.phase) >= phaseIndex('binding');
@@ -437,21 +475,26 @@ function ParamTable({ state, selected, onSelect }: { state: AssayState; selected
               return (
                 <tr key={r.key} className={`border-b border-slate-100 align-top dark:border-white/5 ${active ? 'bg-amber-400/10' : ''}`}>
                   <th scope="row" className="py-2 pr-2 font-normal">
-                    <button
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => onSelect(active ? null : r.key)}
-                      className={`w-full rounded text-left ${FOCUS}`}
-                    >
-                      <span className="flex items-center gap-1 font-semibold text-slate-800 dark:text-slate-100">
-                        {active ? '● ' : ''}{r.name} <span className="font-normal text-slate-500">({r.unit})</span>
-                      </span>
-                      <span className="mt-0.5 block text-[11px] leading-snug text-slate-500 dark:text-slate-400">{r.why}</span>
-                    </button>
+                    <div className="flex items-start gap-1">
+                      <button
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => onSelect(active ? null : r.key)}
+                        className={`min-w-0 flex-1 rounded text-left ${FOCUS}`}
+                      >
+                        <span className="flex items-center gap-1 font-semibold text-slate-800 dark:text-slate-100">
+                          {active ? '● ' : ''}{r.name} <span className="font-normal text-slate-500">({r.unit})</span>
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-snug text-slate-500 dark:text-slate-400">{r.why}</span>
+                      </button>
+                      <InfoHint align="left" text={r.hint} nominal={r.nominal} className="mt-0.5 shrink-0" />
+                    </div>
                   </th>
                   <td className="px-2 py-2 text-right font-mono tabular-nums text-slate-800 dark:text-slate-100">{b === null ? '—' : r.fmt(b)}</td>
-                  <td className="px-2 py-2 text-right font-mono tabular-nums text-slate-800 dark:text-slate-100">{p === null ? '—' : r.fmt(p)}</td>
-                  <td className={`whitespace-nowrap py-2 pl-2 text-right font-mono tabular-nums ${flag ? 'font-bold text-slate-900 dark:text-white' : 'text-slate-600 dark:text-slate-300'}`}>
+                  <td className={`px-2 py-2 text-right font-mono tabular-nums ${TONE_TEXT[deltaTone(showPost ? dl : null, flag)]} ${flag ? TONE_GLOW.bad : ''}`}>
+                    {p === null ? '—' : r.fmt(p)}
+                  </td>
+                  <td className={`whitespace-nowrap py-2 pl-2 text-right font-mono tabular-nums ${TONE_TEXT[deltaTone(dl, flag)]}`}>
                     {dl === null ? '—' : <>{arrow(dl)} {fmtPct(dl)}{flag && <span title={`Beyond the ${CALIBRATION.thresholdPct} % detection threshold`}> ⚑</span>}</>}
                   </td>
                 </tr>
@@ -472,6 +515,12 @@ function ParamTable({ state, selected, onSelect }: { state: AssayState; selected
 
 /* --------------------------------------------------------- equivalent circuit */
 
+const CIRCUIT_TONE_FILL: Record<Tone, string> = {
+  ok: 'fill-emerald-600 dark:fill-emerald-300',
+  bad: 'fill-rose-600 dark:fill-rose-300',
+  neutral: 'fill-slate-800 dark:fill-slate-100',
+};
+
 function CircuitElement({
   part, selected, onSelect, x, y, w, h, name, value, delta, children,
 }: {
@@ -483,11 +532,13 @@ function CircuitElement({
   const onKey = (e: KeyboardEvent<SVGGElement>) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
   };
+  const flag = delta !== null && Math.abs(delta) > CALIBRATION.thresholdPct;
+  const tone = deltaTone(delta, flag);
   return (
     <g role="button" tabIndex={0} aria-pressed={active} aria-label={`${name}: ${value}`} onClick={toggle} onKeyDown={onKey} className="cursor-pointer outline-none [&:focus-visible>rect]:stroke-amber-500 [&:focus-visible>rect]:stroke-2">
       <rect x={x} y={y} width={w} height={h} rx={8} className={active ? 'fill-amber-400/20 stroke-amber-500' : 'fill-transparent stroke-transparent hover:fill-slate-500/10'} strokeWidth={active ? 2 : 1} strokeDasharray={active ? undefined : undefined} />
       {children}
-      <text x={x + w / 2} y={y + h - 6} textAnchor="middle" className="fill-slate-800 font-mono dark:fill-slate-100" fontSize="11" fontWeight={active ? 700 : 500}>
+      <text x={x + w / 2} y={y + h - 6} textAnchor="middle" className={`font-mono ${CIRCUIT_TONE_FILL[tone]}`} fontSize="11" fontWeight={active || tone !== 'neutral' ? 700 : 500}>
         {active ? '● ' : ''}{name} {value}{delta !== null && Math.abs(delta) >= 0.05 ? ` ${arrow(delta)}` : ''}
       </text>
     </g>
@@ -536,8 +587,19 @@ function Circuit({ state, selected, onSelect }: { state: AssayState; selected: P
           <title>Warburg diffusion element</title>
         </CircuitElement>
       </svg>
-      <p className="text-[11px] text-slate-500">
-        Rs: electrolyte · Cdl: double layer · Rct: electron-transfer barrier · W: probe diffusion. Live values follow the binding; ▲/▼ show change from baseline.
+      <p className="flex flex-wrap items-center gap-x-1 gap-y-1 text-[11px] text-slate-500">
+        {(['rs', 'cdl', 'rct', 'warburg'] as const).map((key, i) => {
+          const r = ROWS.find((row) => row.key === key)!;
+          const short = key === 'rs' ? 'Rs: electrolyte' : key === 'cdl' ? 'Cdl: double layer' : key === 'rct' ? 'Rct: electron-transfer barrier' : 'W: probe diffusion';
+          return (
+            <span key={key} className="inline-flex items-center gap-0.5">
+              {short}
+              <InfoHint text={r.hint} nominal={r.nominal} align={i === 0 ? 'left' : 'center'} />
+              {i < 3 ? <span className="ml-1">·</span> : null}
+            </span>
+          );
+        })}
+        <span>Live values follow the binding; ▲/▼ show change from baseline; green/red text flags whether that change is within or beyond the detection threshold.</span>
       </p>
     </section>
   );
@@ -602,16 +664,29 @@ function Detection({ state, dark }: { state: AssayState; dark: boolean }) {
 
       <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <div className="rounded-lg border border-slate-200 p-2 dark:border-white/10">
-          <dt className="text-[11px] text-slate-500">ΔZ @ 100 Hz</dt>
-          <dd className="font-mono font-semibold text-slate-800 dark:text-slate-100">{dZ === null ? '—' : `${dZ > 0 ? '+' : ''}${fmtNum(dZ)} Ω`}</dd>
+          <dt className="flex items-center gap-1 text-[11px] text-slate-500">
+            ΔZ @ 100 Hz
+            <InfoHint text="Change in total impedance magnitude at 100 Hz versus the clean-electrode baseline." nominal="Near 0 Ω for a clean/negative sample; a positive shift tracks Rct rising with binding." align="left" />
+          </dt>
+          <dd className={`font-mono font-semibold ${TONE_TEXT[deltaTone(post ? dZ : null, dZ !== null && state.deltaZMagPct !== null && Math.abs(state.deltaZMagPct) > CALIBRATION.thresholdPct)]}`}>
+            {dZ === null ? '—' : `${dZ > 0 ? '+' : ''}${fmtNum(dZ)} Ω`}
+          </dd>
           <dd className="font-mono text-[11px] text-slate-500">{state.deltaZMagPct === null || !post ? '' : `${arrow(state.deltaZMagPct)} ${fmtPct(state.deltaZMagPct)}`}</dd>
         </div>
         <div className="rounded-lg border border-slate-200 p-2 dark:border-white/10">
-          <dt className="text-[11px] text-slate-500">ΔRct</dt>
-          <dd className="font-mono font-semibold text-slate-800 dark:text-slate-100">{post ? `${arrow(state.deltaRctPct)} ${fmtPct(state.deltaRctPct)}` : '—'}</dd>
+          <dt className="flex items-center gap-1 text-[11px] text-slate-500">
+            ΔRct
+            <InfoHint text="Percent change in charge-transfer resistance versus baseline -- the primary detection signal." nominal="Below the threshold for a clean sample; above it once E. coli binding is significant." align="left" />
+          </dt>
+          <dd className={`font-mono font-semibold ${TONE_TEXT[deltaTone(post ? state.deltaRctPct : null, state.deltaRctPct !== null && Math.abs(state.deltaRctPct) > CALIBRATION.thresholdPct)]}`}>
+            {post ? `${arrow(state.deltaRctPct)} ${fmtPct(state.deltaRctPct)}` : '—'}
+          </dd>
         </div>
         <div className="rounded-lg border border-slate-200 p-2 dark:border-white/10">
-          <dt className="text-[11px] text-slate-500">Threshold</dt>
+          <dt className="flex items-center gap-1 text-[11px] text-slate-500">
+            Threshold
+            <InfoHint text="The ΔRct magnitude a sample must exceed to be called positive: 3x the baseline noise standard deviation." nominal={`Fixed at ${CALIBRATION.thresholdPct} % (3 × ${CALIBRATION.noiseSdPct} % baseline noise).`} align="right" />
+          </dt>
           <dd className="font-mono font-semibold text-slate-800 dark:text-slate-100">&gt; {CALIBRATION.thresholdPct} %</dd>
           <dd className="text-[11px] text-slate-500">3 × {CALIBRATION.noiseSdPct} %</dd>
         </div>
@@ -673,20 +748,169 @@ function HowItWorks() {
   );
 }
 
+/* --------------------------------------------------------------- live readout */
+
+function fmtClock(s: number): string {
+  const t = Math.max(0, Math.floor(s));
+  const pad = (v: number) => String(v).padStart(2, '0');
+  return `${pad(Math.floor(t / 3600))}:${pad(Math.floor((t % 3600) / 60))}:${pad(t % 60)}`;
+}
+
+function fmtFreq(f: number): string {
+  if (f >= 1000) return `${(f / 1000).toPrecision(3)} kHz`;
+  return `${f.toPrecision(3)} Hz`;
+}
+
+function LiveReadout({ state, dark, interactive }: { state: AssayState; dark: boolean; interactive: boolean }) {
+  const c = palette(dark);
+  const live = state.live;
+  const trace = live?.trace ?? [];
+  const data = useMemo(() => trace.map((p) => ({ m: p.t / 60, d: p.dRctPct })), [trace]);
+  const last = trace.length ? trace[trace.length - 1] : null;
+  const idle = state.phase === 'idle';
+  const acquiring = !idle && !state.stale;
+  const sweepF = live?.sweepFreqHz ?? null;
+
+  const status = state.stale && !idle
+    ? 'Feed stalled'
+    : idle
+      ? 'Standby'
+      : sweepF !== null
+        ? `${state.phase === 'baseline' ? 'Baseline sweep' : `Sweep ${(live?.sweepIndex ?? 0) + 1}`} · ${fmtFreq(sweepF)}`
+        : state.phase === 'exposure' ? 'Loading sample' : `Reading ${(live?.sweepIndex ?? 0) + 1}`;
+
+  const lo = data.reduce((m, p) => Math.min(m, p.d), 0);
+  const hi = data.reduce((m, p) => Math.max(m, p.d), CALIBRATION.thresholdPct);
+  const yLo = Math.floor((lo - 4) / 10) * 10;
+  const yHi = Math.ceil((hi + 6) / 10) * 10;
+  const tick = { fontSize: 10, fill: c.axis };
+  const flag = last !== null && last.dRctPct > CALIBRATION.thresholdPct;
+
+  return (
+    <section className={CARD} aria-label="Live readout">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h2 className={H}>
+          Live readout
+          <InfoHint align="left" text="What the analyser reports while it runs: the frequency being measured, the running clock, and the detection signal as a time series (sensorgram). The readout keeps going after the last step, so the sensor can be watched responding to a change of sample." />
+        </h2>
+        <span className="flex items-center gap-1.5 font-mono text-[11px] text-slate-700 dark:text-slate-200">
+          <span className="relative flex h-2 w-2" aria-hidden="true">
+            {acquiring && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${acquiring ? 'bg-emerald-500' : 'bg-slate-400 dark:bg-slate-600'}`} />
+          </span>
+          {status}
+        </span>
+        <span className="ml-auto font-mono text-[11px] text-slate-500" title="Bench time this run stands for; the browser assay is time-compressed">
+          T+ {fmtClock(live?.labTimeS ?? 0)}
+        </span>
+      </div>
+
+      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <div className="rounded-lg border border-slate-200 p-2 dark:border-white/10">
+          <dt className="text-[11px] text-slate-500">|Z| @ {REF_FREQ_HZ} Hz</dt>
+          <dd className="font-mono font-semibold tabular-nums text-slate-800 dark:text-slate-100">{last ? `${fmtNum(last.zMag)} Ω` : '—'}</dd>
+        </div>
+        <div className="rounded-lg border border-slate-200 p-2 dark:border-white/10">
+          <dt className="text-[11px] text-slate-500">ΔRct now</dt>
+          <dd className={`font-mono font-semibold tabular-nums ${TONE_TEXT[deltaTone(last ? last.dRctPct : null, flag)]}`}>{last ? fmtPct(last.dRctPct) : '—'}</dd>
+        </div>
+        <div className="rounded-lg border border-slate-200 p-2 dark:border-white/10">
+          <dt className="text-[11px] text-slate-500">Aptamer occupancy</dt>
+          <dd className="font-mono font-semibold tabular-nums text-slate-800 dark:text-slate-100">{last ? `${(last.theta * 100).toFixed(1)} %` : '—'}</dd>
+        </div>
+      </dl>
+
+      {data.length < 2 ? (
+        <div className="mt-3 flex h-40 items-center justify-center rounded-lg border border-dashed border-slate-200 px-4 text-center text-sm text-slate-500 dark:border-white/10">
+          {interactive ? 'Press “Run assay” to start acquiring.' : 'Waiting for readings.'}
+        </div>
+      ) : (
+        <figure className="mt-3 min-w-0">
+          <figcaption className="mb-1 text-[11px] font-medium text-slate-600 dark:text-slate-300">Sensorgram: ΔRct % against bench time</figcaption>
+          <div role="img" aria-label="Time series of the percent change in charge-transfer resistance, with the detection threshold marked">
+            <ResponsiveContainer width="100%" height={170}>
+              <LineChart data={data} margin={{ top: 6, right: 12, bottom: 14, left: 4 }}>
+                <CartesianGrid stroke={c.grid} strokeDasharray="3 3" />
+                <XAxis type="number" dataKey="m" domain={['dataMin', 'dataMax']} tick={tick} tickFormatter={(v: number) => v.toFixed(v < 10 ? 1 : 0)} label={{ value: 'Bench time (min)', fill: c.axis, fontSize: 10, position: 'insideBottom', offset: -2 }} />
+                <YAxis domain={[yLo, yHi]} tick={tick} width={44} allowDataOverflow tickFormatter={(v: number) => `${v}%`} />
+                <Tooltip contentStyle={tooltipStyle(c)} labelFormatter={(m) => `${typeof m === 'number' ? m.toFixed(1) : m} min`} formatter={(v) => (typeof v === 'number' ? `${v.toFixed(1)} %` : String(v))} />
+                <ReferenceLine y={CALIBRATION.thresholdPct} stroke={c.thr} strokeDasharray="4 3" label={{ value: `threshold ${CALIBRATION.thresholdPct}%`, fill: c.thr, fontSize: 9, position: 'insideTopLeft' }} />
+                <Line type="linear" dataKey="d" name="ΔRct" stroke={c.post} strokeWidth={1.75} dot={false} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </figure>
+      )}
+      {interactive && live?.monitoring && (
+        <p className="mt-2 text-[11px] text-slate-500">
+          Steps complete; the sensor is still being read. Move the <em>E. coli</em> slider or switch to the clean control to watch the surface bind or release in real time.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------ reference data */
+
+function ReferenceData({ showRef, onShowRef }: { showRef: boolean; onShowRef: (v: boolean) => void }) {
+  const p = DEFAULTS.params;
+  return (
+    <section className={CARD} aria-label="Published reference data">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h2 className={H}>
+          Published reference data
+          <InfoHint align="left" text="Bench measurements of comparable E. coli biosensors, for judging whether the simulated magnitudes are realistic. They are shown beside the model and do not feed it." />
+        </h2>
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+          <input type="checkbox" checked={showRef} onChange={(e) => onShowRef(e.target.checked)} className="accent-amber-500" />
+          Overlay the open spectrum on the Bode plots
+        </label>
+      </div>
+      <ul className="mt-3 grid gap-3 @2xl:grid-cols-2">
+        {REFERENCE_SOURCES.map((s) => (
+          <li key={s.id} className="rounded-lg border border-slate-200 p-3 text-xs dark:border-white/10">
+            <p className="font-semibold text-slate-800 dark:text-slate-100">{s.sensor}</p>
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-slate-700 dark:text-slate-300">
+              {s.facts.map((f) => <li key={f}>{f}</li>)}
+            </ul>
+            <p className="mt-1.5 text-[11px] leading-snug text-slate-500">{s.caveat}</p>
+            <a href={s.url} target="_blank" rel="noreferrer" className={`mt-1.5 inline-block rounded text-[11px] text-amber-700 underline decoration-dotted underline-offset-2 dark:text-amber-300 ${FOCUS}`}>
+              {s.citation}
+            </a>
+          </li>
+        ))}
+      </ul>
+      <h3 className="mt-4 text-[11px] font-medium text-slate-600 dark:text-slate-300">How the twin compares</h3>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-slate-600 dark:text-slate-400">
+        <li>Sweep ({DEFAULTS.fMin} Hz–{DEFAULTS.fMax / 1000} kHz, {DEFAULTS.amplitudeMv} mV) and the modified Randles circuit match the published faradaic protocols.</li>
+        <li>Rs {p.rs} Ω sits within a factor of three of the measured 297 Ω; Rct {p.rct} Ω is about ten times the 10² Ω reported on macro-electrodes.</li>
+        <li>The twin’s saturated response (ΔRct +{(DEFAULTS.aRct * 100).toFixed(0)} %) is several times stronger than the +28 % reported at 6×10⁵ CFU/mL, so its detection margins are optimistic.</li>
+        <li>Its {(DEFAULTS.noise * 100).toFixed(0)} % point noise is at the quiet end of the 1–5 % scatter in the open spectra.</li>
+        <li>The binding step stands for 30 min of contact; the cited assays incubate for 60 min.</li>
+      </ul>
+    </section>
+  );
+}
+
 /* ---------------------------------------------------------------------- panel */
 
 export function EisPanel({ state, controls, selected, onSelect }: EisPanelProps) {
   const dark = useIsDark();
+  const [showRef, setShowRef] = useState(false);
   return (
     <div className="@container space-y-4">
       {controls && <Workflow state={state} controls={controls} />}
-      <Charts state={state} dark={dark} />
-      <div className="grid gap-4 @4xl:grid-cols-2">
+      <LiveReadout state={state} dark={dark} interactive={controls !== null} />
+      <Charts state={state} dark={dark} showRef={showRef} />
+      <div className="grid gap-4 @2xl:grid-cols-2">
         <Circuit state={state} selected={selected} onSelect={onSelect} />
         <Detection state={state} dark={dark} />
       </div>
-      <ParamTable state={state} selected={selected} onSelect={onSelect} />
-      <HowItWorks />
+      <div className="grid gap-4 @3xl:grid-cols-2 @3xl:items-start">
+        <ParamTable state={state} selected={selected} onSelect={onSelect} />
+        <HowItWorks />
+      </div>
+      <ReferenceData showRef={showRef} onShowRef={setShowRef} />
     </div>
   );
 }

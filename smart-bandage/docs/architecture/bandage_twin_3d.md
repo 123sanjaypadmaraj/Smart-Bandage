@@ -83,13 +83,55 @@ not rename or reshape existing exports. A new `PartKey` must be added to
 together. The circuit equations and defaults in the `types.ts` header must stay
 in sync with `impedance.py`; `tests/test_eis_ts_parity.py` enforces this to a
 relative error of 1e-6 on spectra, sensor parameters, calibration, LOD and
-detection. The sequencer's binding step is normalised to end exactly at
-Langmuir equilibrium, so the browser result matches the backend's equilibrium
-assay.
+detection. Binding in the sequencer is first-order relaxation towards Langmuir
+equilibrium (`tau`); `skipTo()` past the binding step starts from equilibrium,
+which is what the parity dump uses, so the browser result matches the
+backend's equilibrium assay.
+
+## Live behaviour (manual assay)
+
+`AssayController` behaves like a running analyser rather than a slideshow:
+
+- From the binding step on it sweeps continuously (`sweepPeriod`), high to low
+  frequency. Each sweep has its own seeded noise and replaces the previous
+  one point by point; `AssayState.live.sweepFreqHz` is the point being taken.
+- From the compare step on the Randles fit is redone once per completed
+  sweep, warm-started from the previous fit, so the parameter table, circuit
+  and detection card move with the data.
+- The scripted steps end at `result` but the clock does not. The sensor stays
+  monitored, and `setCfu()` relaxes the surface to the new equilibrium, so a
+  sample change (or a switch to the clean control) can be watched live.
+- `AssayState.live.trace` is the sensorgram (dRct %, |Z| at 100 Hz, occupancy
+  against bench time). `labDurations` maps the time-compressed steps to bench
+  time (60 s baseline, 60 s exposure, 30 min binding, as in `EisAssay.run`).
+
+`useLiveAssay` fills the same `live` block from the backend's `twin_eis`
+readings (one sensorgram sample per reading, against `t_s`), so the Live
+readout card works on both paths.
+
+## Published reference data
+
+`referenceData.ts` holds bench data of the same order of magnitude, shown in
+the panel's "Published reference data" card and, optionally, overlaid on the
+Bode plots. It does not feed the model.
+
+- Open spectra: Zenodo doi:10.5281/zenodo.10719208 (CC-BY-4.0), E. coli
+  calibration of a laser-inscribed-graphene / nano-Pt aptasensor: Rs about
+  297 ohm, |Z| about 1.0 kohm at 1 Hz and 7.9 kohm at 0.1 Hz, 1-5 % scatter.
+  It is non-faradaic, so it has no Rct semicircle. The deposit's dose blocks
+  carry a log frequency column that does not match their values; the header
+  of `referenceData.ts` records why the baseline block's grid is used.
+- Literature values (faradaic aptasensors, PBASE-on-graphene chemistry) are
+  listed with DOIs in `REFERENCE_SOURCES`.
+
+Against these the twin's defaults are the right order for Rs and noise, about
+ten times high for Rct, and several times strong for the binding gain
+(+160 % at saturation against a reported +28 % at 6e5 CFU/mL).
 
 ## Limits
 
-Parameters are illustrative, not fitted. The scene is procedural (no CAD
+Parameters are illustrative, not fitted (see Published reference data for how
+far they sit from bench values). The scene is procedural (no CAD
 geometry), the calibration line (54.8 %/decade, -136 %) is fitted to the model and shared by
 the browser and the API, and `window.bandageScene`
 exists only in dev builds.

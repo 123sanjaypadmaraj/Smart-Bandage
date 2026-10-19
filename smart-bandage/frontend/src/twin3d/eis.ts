@@ -14,12 +14,17 @@
  *    parameters. From the 'compare' step on it reports parameters FITTED (Levenberg-Marquardt)
  *    to the noisy spectra, and detection uses the fitted dRct%. noise = 0 skips the fit
  *    (fit of exact data == truth), which keeps dRct% exactly 0 at 0 CFU/mL in tests.
+ *  - Live instrument behaviour (AssayController): from the binding step on the analyser
+ *    sweeps continuously, each sweep with its own seeded noise, and the fit is redone per
+ *    sweep. The scripted steps end at 'result' but the clock does not: the sensor stays
+ *    monitored, and changing the sample concentration relaxes the surface to the new
+ *    Langmuir equilibrium with time constant tau. skipTo() past binding assumes equilibrium.
  *  - Calibration line = log-linear least-squares fit of the model's own noise-free dRct%
  *    over 1e2..1e5 CFU/mL (identical to Calibration.fit_to_model() in the backend).
  *    The sensor saturates (dRct% -> 160 %), so estimateCfu() is clamped to CAL_MAX_CFU.
  */
 import { REF_FREQ_HZ } from './types.ts';
-import type { AssayPhase, AssayState, EisParams, EisSpectrum, ImpedancePoint } from './types.ts';
+import type { AssayPhase, AssayState, EisParams, EisSpectrum, ImpedancePoint, TracePoint } from './types.ts';
 
 /* ------------------------------------------------------------------ defaults */
 
@@ -300,9 +305,10 @@ function levenbergMarquardt(x0: number[], resid: (x: number[]) => number[], iter
  * Least-squares fit of the modified Randles circuit to a (noisy) spectrum. Port of
  * fit_randles() in the backend: LM on (ln Rs, ln Rct, ln Q, ln sigma, n) minimising the
  * relative complex residual, from several starting points. Returns params (Cdl via Brug)
- * and the rms relative residual.
+ * and the rms relative residual. `init` (e.g. the previous sweep's fit) replaces the
+ * multi-start search with a single warm start, for refitting a slowly moving spectrum.
  */
-export function fitRandles(spec: EisSpectrum): { params: EisParams; rms: number } {
+export function fitRandles(spec: EisSpectrum, init?: EisParams): { params: EisParams; rms: number } {
   const pts = spec.slice().sort((a, b) => a.freq - b.freq);
   const scale = pts.map((p) => 1 / p.mag);
   const resid = (x: number[]): number[] => {
@@ -321,7 +327,11 @@ export function fitRandles(spec: EisSpectrum): { params: EisParams; rms: number 
   for (let i = 1; i < pts.length; i++) if (-pts[i].im > -pts[k].im) k = i;
   const wPk = 2 * Math.PI * pts[k].freq;
   let best: { x: number[]; cost: number } | null = null;
-  for (const n0 of [0.9, 0.75]) {
+  if (init) {
+    const q = qFromCdl(init.cdl, init.rs, init.rct, init.n);
+    best = levenbergMarquardt([Math.log(init.rs), Math.log(init.rct), Math.log(q), Math.log(Math.max(init.sigma, 1e-6)), init.n], resid);
+  }
+  for (const n0 of init ? [] : [0.9, 0.75]) {
     for (const sig0 of [0.05 * rct0, 0.2 * rct0]) {
       for (const qs of [1, 0.3, 3]) {
         const q0 = qs / (rct0 * Math.pow(wPk, n0));
@@ -343,15 +353,21 @@ export type TimedPhase = Exclude<AssayPhase, 'idle'>;
 const TIMED: TimedPhase[] = ['baseline', 'exposure', 'binding', 'measure2', 'compare', 'result'];
 
 export interface AssayConfig {
-  /** seconds spent in each phase (result is the terminal hold; its duration only scales its progress bar) */
+  /** seconds spent in each phase (result is the last scripted step; the sensor keeps being monitored after it) */
   durations: Record<TimedPhase, number>;
-  /** binding time constant, seconds (theta(t) = theta_eq * (1 - exp(-t/tau)) / (1 - exp(-T_binding/tau)), reaching theta_eq at the end of the step) */
+  /** binding time constant, seconds: d(theta)/dt = (theta_eq - theta) / tau from the start of the binding step on */
   tau: number;
   /** relative SD of measurement noise on displayed spectra (0 for tests) */
   noise: number;
   seed: number;
   kd: number;
   params: EisParams;
+  /** assay seconds one full frequency sweep of the live (post-exposure) spectrum takes */
+  sweepPeriod: number;
+  /** bench time each step stands for, seconds (display only: the browser assay is time-compressed) */
+  labDurations: Record<TimedPhase, number>;
+  /** assay seconds between sensorgram samples */
+  traceEvery: number;
 }
 
 export const DEFAULT_ASSAY_CONFIG: AssayConfig = {
@@ -361,13 +377,26 @@ export const DEFAULT_ASSAY_CONFIG: AssayConfig = {
   seed: DEFAULTS.seed,
   kd: DEFAULTS.kd,
   params: DEFAULTS.params,
+  sweepPeriod: 1.2,
+  // baseline / exposure / incubation / second sweep as in the backend EisAssay.run timeline
+  labDurations: { baseline: 60, exposure: 60, binding: 1800, measure2: 60, compare: 5, result: 5 },
+  traceEvery: 0.1,
 };
+
+/** Sensorgram ring-buffer length (samples). */
+export const TRACE_MAX = 480;
+const LIVE_SEED_OFFSET = 101;
+const EMPTY_TRACE: TracePoint[] = [];
 
 export class AssayController {
   private cfg: AssayConfig;
   private freqs = logSweep();
   private cfu = 0;
+  /** scripted-sequence time, clamped at the end of the result step */
   private t = 0;
+  /** total running time since start: keeps counting while the finished sensor is monitored */
+  private clock = 0;
+  private theta = 0;
   private started = false;
   private paused = false;
   // caches so unchanged spectra keep object identity between ticks
@@ -376,18 +405,23 @@ export class AssayController {
   private curKey = '';
   private curSpec: EisSpectrum;
   private baseFit: EisParams | null = null;
-  private postFitKey = '';
+  private fitSweep = Number.NaN;
   private postFit: EisParams | null = null;
+  private trace: TracePoint[] = EMPTY_TRACE;
+  private nextTraceAt = 0;
+  private traceRand: () => number;
 
   constructor(config: Partial<AssayConfig> = {}) {
     this.cfg = {
       ...DEFAULT_ASSAY_CONFIG,
       ...config,
       durations: { ...DEFAULT_ASSAY_CONFIG.durations, ...(config.durations ?? {}) },
+      labDurations: { ...DEFAULT_ASSAY_CONFIG.labDurations, ...(config.labDurations ?? {}) },
     };
     this.baseSpec = spectrum(this.cfg.params, this.freqs, this.cfg.noise, this.cfg.seed);
     this.idleSpec = this.baseSpec;
     this.curSpec = this.idleSpec;
+    this.traceRand = mulberry32(this.cfg.seed ^ 0x9e3779b9);
   }
 
   /** Start (or restart) the sequence from the baseline step. Optionally sets the sample concentration. */
@@ -395,15 +429,16 @@ export class AssayController {
     if (cfu !== undefined) this.cfu = Math.max(0, cfu);
     this.started = true;
     this.paused = false;
-    this.t = 0;
+    this.jump(0, 0);
   }
 
   reset(): void {
     this.started = false;
     this.paused = false;
-    this.t = 0;
+    this.jump(0, 0);
   }
 
+  /** Change the sample concentration. Live: once binding has begun the surface relaxes towards the new equilibrium. */
   setCfu(cfu: number): void {
     this.cfu = Math.max(0, cfu);
   }
@@ -411,21 +446,46 @@ export class AssayController {
   pause(): void { this.paused = true; }
   resume(): void { this.paused = false; }
   get isPaused(): boolean { return this.paused; }
-  get isRunning(): boolean { return this.started && !this.paused && !this.finished; }
-  get finished(): boolean { return this.started && this.t >= this.phaseStart('result') + this.cfg.durations.result; }
+  /** true while the instrument is acquiring -- including the open-ended monitoring after the result step */
+  get isRunning(): boolean { return this.started && !this.paused; }
+  /** the scripted steps are over (the sensor is still being monitored) */
+  get finished(): boolean { return this.started && this.t >= this.endTime(); }
 
-  /** Advance by dtSeconds of assay time (no-op when not started, paused or finished). */
+  /** Advance by dtSeconds of assay time (no-op when not started or paused). */
   tick(dtSeconds: number): void {
     if (!this.started || this.paused) return;
-    const end = this.phaseStart('result') + this.cfg.durations.result;
-    this.t = Math.min(this.t + Math.max(dtSeconds, 0), end);
+    const prev = this.clock;
+    this.clock += Math.max(dtSeconds, 0);
+    this.t = Math.min(this.clock, this.endTime());
+    // first-order binding kinetics, exact for a constant target over the step
+    const dtBind = this.clock - Math.max(prev, this.phaseStart('binding'));
+    if (dtBind > 0) {
+      const target = coverage(this.cfu, this.cfg.kd);
+      this.theta = target + (this.theta - target) * Math.exp(-dtBind / this.cfg.tau);
+    }
+    if (this.clock >= this.nextTraceAt) {
+      this.nextTraceAt = this.clock + this.cfg.traceEvery;
+      this.trace = [...this.trace.slice(-(TRACE_MAX - 1)), this.sample()];
+    }
   }
 
-  /** Jump to the beginning of a phase; 'idle' resets. */
+  /** Jump to the beginning of a phase; 'idle' resets. Steps after binding start from binding equilibrium. */
   skipTo(phase: AssayPhase): void {
     if (phase === 'idle') { this.reset(); return; }
     this.started = true;
-    this.t = this.phaseStart(phase);
+    const bound = ASSAY_ORDER.indexOf(phase) > ASSAY_ORDER.indexOf('binding');
+    this.jump(this.phaseStart(phase), bound ? coverage(this.cfu, this.cfg.kd) : 0);
+  }
+
+  private jump(t: number, theta: number): void {
+    this.t = t;
+    this.clock = t;
+    this.theta = theta;
+    this.trace = EMPTY_TRACE;
+    this.nextTraceAt = t;
+    this.traceRand = mulberry32(this.cfg.seed ^ 0x9e3779b9);
+    this.fitSweep = Number.NaN;
+    this.postFit = null;
   }
 
   private phaseStart(phase: AssayPhase): number {
@@ -435,6 +495,39 @@ export class AssayController {
       s += this.cfg.durations[p];
     }
     return s;
+  }
+
+  private endTime(): number {
+    return this.phaseStart('result') + this.cfg.durations.result;
+  }
+
+  /** Bench time the running clock stands for; monitoring continues at the binding step's rate so kinetics keep their time scale. */
+  private labTime(): number {
+    const { durations, labDurations } = this.cfg;
+    let s = 0;
+    let lab = 0;
+    for (const p of TIMED) {
+      const d = durations[p];
+      if (this.clock < s + d) return lab + (d > 0 ? (this.clock - s) / d : 1) * labDurations[p];
+      s += d;
+      lab += labDurations[p];
+    }
+    const rate = durations.binding > 0 ? labDurations.binding / durations.binding : 1;
+    return lab + (this.clock - s) * rate;
+  }
+
+  /** One sensorgram sample: the detection signal as a continuous single-frequency readout would report it. */
+  private sample(): TracePoint {
+    const { noise, params } = this.cfg;
+    const cur = paramsAtCoverage(params, this.theta);
+    const k = noise > 0 ? noise / DEFAULTS.noise : 0;
+    const dRct = deltaPct(cur.rct, params.rct) as number;
+    return {
+      t: this.labTime(),
+      dRctPct: dRct + (k > 0 ? CALIBRATION.noiseSdPct * k * gauss(this.traceRand) : 0),
+      zMag: readout(cur).mag * (1 + (noise > 0 ? noise * gauss(this.traceRand) : 0)),
+      theta: this.theta,
+    };
   }
 
   getState(): AssayState {
@@ -457,13 +550,7 @@ export class AssayController {
 
     const idx = ASSAY_ORDER.indexOf(phase);
     const bindStart = this.phaseStart('binding');
-    const thetaEq = coverage(this.cfu, cfg.kd);
-    // binding stops when the binding step ends (sample is then measured, so the spectrum is static)
-    const tb = Math.min(Math.max(0, this.t - bindStart), cfg.durations.binding);
-    // normalised so the binding step ends exactly at Langmuir equilibrium (matches the backend's equilibrium assay)
-    const theta = this.started && this.t >= bindStart
-      ? (thetaEq * (1 - Math.exp(-tb / cfg.tau))) / (1 - Math.exp(-cfg.durations.binding / cfg.tau))
-      : 0;
+    const theta = this.started && this.t >= bindStart ? this.theta : 0;
 
     const clean = cfg.params;
     const trueCurrent = paramsAtCoverage(clean, theta);
@@ -472,31 +559,46 @@ export class AssayController {
     let baselineP: EisParams = clean;
     let current: EisParams = trueCurrent;
 
+    // The analyser sweeps continuously from the binding step on, high -> low frequency.
+    const postMeasured = idx >= ASSAY_ORDER.indexOf('binding');
+    const n = this.freqs.length;
+    const sweepPos = postMeasured && cfg.sweepPeriod > 0 ? (this.clock - bindStart) / cfg.sweepPeriod : 0;
+    const sweepIndex = Math.max(0, Math.floor(sweepPos));
+    const sweepProgress = phase === 'baseline' ? phaseProgress : postMeasured ? sweepPos - Math.floor(sweepPos) : 0;
+    const done = Math.min(n - 1, Math.floor(sweepProgress * n)); // points of this sweep already taken
+    const sweeping = phase === 'baseline' || postMeasured;
+    const seedOf = (s: number) => cfg.seed + LIVE_SEED_OFFSET + s;
+
     // live spectrum: clean pattern until binding starts, then follow the params
     let currentSpectrum = this.idleSpec;
-    const postMeasured = idx >= ASSAY_ORDER.indexOf('binding');
     if (postMeasured) {
-      const key = `${trueCurrent.rs}|${trueCurrent.rct}|${trueCurrent.cdl}|${trueCurrent.sigma}`;
+      const pKey = `${trueCurrent.rs}|${trueCurrent.rct}|${trueCurrent.cdl}|${trueCurrent.sigma}`;
+      const key = cfg.noise > 0 ? `${pKey}|${sweepIndex}|${done}` : pKey;
       if (key !== this.curKey) {
         this.curKey = key;
-        this.curSpec = spectrum(trueCurrent, this.freqs, cfg.noise, cfg.seed + 1);
+        if (cfg.noise > 0) {
+          // rolling refresh, like an analyser screen: points already taken in this sweep are new, the rest are the previous sweep's
+          const fresh = spectrum(trueCurrent, this.freqs, cfg.noise, seedOf(sweepIndex));
+          const prior = spectrum(trueCurrent, this.freqs, cfg.noise, seedOf(sweepIndex - 1));
+          this.curSpec = prior.map((pt, i) => (i >= n - 1 - done ? fresh[i] : pt));
+        } else {
+          this.curSpec = spectrum(trueCurrent, this.freqs, 0);
+        }
       }
       currentSpectrum = this.curSpec;
     }
 
-    // equivalent-circuit modelling: fit both measured spectra (noise = 0 -> exact data -> truth)
+    // equivalent-circuit modelling: fit both measured spectra (noise = 0 -> exact data -> truth).
+    // The post-exposure fit is redone once per completed sweep, warm-started from the previous one.
     if (fitted && cfg.noise > 0) {
       if (!this.baseFit) this.baseFit = fitRandles(this.baseSpec).params;
       baselineP = this.baseFit;
-      if (postMeasured) {
-        if (this.postFitKey !== this.curKey || !this.postFit) {
-          this.postFitKey = this.curKey;
-          this.postFit = fitRandles(this.curSpec).params;
-        }
-        current = this.postFit;
-      } else {
-        current = baselineP;
+      if (this.fitSweep !== sweepIndex || !this.postFit) {
+        this.fitSweep = sweepIndex;
+        const last = spectrum(trueCurrent, this.freqs, cfg.noise, seedOf(sweepIndex - 1));
+        this.postFit = fitRandles(last, this.postFit ?? undefined).params;
       }
+      current = this.postFit;
     }
     const baseline = baselineDone ? baselineP : null;
 
@@ -524,6 +626,14 @@ export class AssayController {
       detected,
       estimatedCfuPerMl: isResult && detected ? estimateCfu(deltaRctPct) : null,
       stale: false,
+      live: {
+        sweepIndex,
+        sweepProgress,
+        sweepFreqHz: sweeping ? this.freqs[n - 1 - done] : null,
+        labTimeS: this.started ? this.labTime() : 0,
+        monitoring: this.finished,
+        trace: this.trace,
+      },
     };
   }
 }

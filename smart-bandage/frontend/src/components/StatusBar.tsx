@@ -61,6 +61,7 @@ function TileShell({ tone, flashKey, children }: { tone: Tone; flashKey?: string
 function Stat({
   label,
   hint,
+  nominal,
   value,
   tone = "neutral",
   icon: Icon,
@@ -68,6 +69,7 @@ function Stat({
 }: {
   label: string;
   hint: string;
+  nominal?: string;
   value: string;
   tone?: Tone;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
@@ -82,7 +84,7 @@ function Stat({
       <div className="min-w-0">
         <p className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-slate-500">
           {label}
-          <InfoHint text={hint} align="left" />
+          <InfoHint text={hint} nominal={nominal} align="left" />
         </p>
         <p className={`mt-0.5 font-mono text-base font-medium leading-tight ${s.text}`}>{value}</p>
       </div>
@@ -93,6 +95,7 @@ function Stat({
 function SparklineStat({
   label,
   hint,
+  nominal,
   value,
   tone,
   icon: Icon,
@@ -100,6 +103,7 @@ function SparklineStat({
 }: {
   label: string;
   hint: string;
+  nominal?: string;
   value: string;
   tone: Tone;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
@@ -114,7 +118,7 @@ function SparklineStat({
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-slate-500">
           {label}
-          <InfoHint text={hint} align="left" />
+          <InfoHint text={hint} nominal={nominal} align="left" />
         </p>
         <p className={`mt-0.5 font-mono text-base font-medium leading-tight ${s.text}`}>{value}</p>
       </div>
@@ -126,11 +130,13 @@ function SparklineStat({
 function GaugeStat({
   label,
   hint,
+  nominal,
   value,
   tone,
 }: {
   label: string;
   hint: string;
+  nominal?: string;
   value: number | null;
   tone: Tone;
 }) {
@@ -147,7 +153,7 @@ function GaugeStat({
       <div className="min-w-0">
         <p className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-slate-500">
           {label}
-          <InfoHint text={hint} align="left" />
+          <InfoHint text={hint} nominal={nominal} align="left" />
         </p>
         <p className={`mt-0.5 font-mono text-base font-medium leading-tight ${s.text}`}>
           {value !== null ? `${Math.round(value * 100)}%` : "—"}
@@ -169,6 +175,7 @@ export function StatusBar({ status, wsConnected, lastMeasurement, records }: Sta
       <Stat
         label="Sensor"
         hint="Whether the backend currently has a live connection to this device's sensor hardware (or its simulator)."
+        nominal="Connected."
         value={connected ? "Connected" : "Disconnected"}
         tone={connected ? "ok" : "bad"}
         icon={IconCheckCircle}
@@ -176,6 +183,7 @@ export function StatusBar({ status, wsConnected, lastMeasurement, records }: Sta
       <Stat
         label="Live feed"
         hint="Whether this dashboard's WebSocket connection to the backend is open and streaming readings in real time."
+        nominal="Streaming."
         value={wsConnected ? "Streaming" : "Idle"}
         tone={wsConnected ? "ok" : "warn"}
         icon={IconZap}
@@ -183,6 +191,7 @@ export function StatusBar({ status, wsConnected, lastMeasurement, records }: Sta
       <SparklineStat
         label="Battery"
         hint="Remaining battery charge reported by the device itself, 0-100%."
+        nominal="≥ 30% green · 15-30% amber (low) · < 15% red (critical, replace soon)."
         value={battery !== null ? `${battery}%` : "—"}
         tone={battery !== null ? (battery < 15 ? "bad" : battery < 30 ? "warn" : "ok") : "neutral"}
         icon={IconBattery}
@@ -191,12 +200,14 @@ export function StatusBar({ status, wsConnected, lastMeasurement, records }: Sta
       <GaugeStat
         label="Signal quality"
         hint="A 0-100% score for how clean the current sensor signal is. Low values usually mean noise, drift, or poor electrode contact."
+        nominal="≥ 80% green (clean) · 50-80% amber (noisy) · < 50% red (unreliable)."
         value={quality}
         tone={quality !== null ? (quality < 0.5 ? "bad" : quality < 0.8 ? "warn" : "ok") : "neutral"}
       />
       <Stat
         label="Latest status"
         hint="Validity of the single most recent reading: valid, invalid (failed a sanity check), or error (device fault)."
+        nominal="valid."
         value={lastMeasurement?.status ?? "—"}
         tone={lastMeasurement?.status === "valid" ? "ok" : lastMeasurement ? "bad" : "neutral"}
         icon={IconActivity}

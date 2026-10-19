@@ -24,12 +24,16 @@
  *    whenever no reading has arrived for STALE_AFTER_MS -- "connected" alone
  *    is not enough because a socket can stay open after the simulation
  *    behind it stops, and a frozen scene is the honest rendering of that.
+ *  - live: the sensorgram is the readings themselves, kept in arrival order
+ *    against the backend's simulated clock (t_s). Nothing is interpolated.
+ *    The wire carries finished sweeps, so there is no sweep-in-progress
+ *    frequency to report.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TwinEisReading, TwinEisSpectrumPoint } from '../types';
-import { DEFAULTS, deltaPct, logSweep, readout, spectrum } from './eis';
+import { DEFAULTS, TRACE_MAX, deltaPct, logSweep, readout, spectrum } from './eis';
 import { REF_FREQ_HZ } from './types';
-import type { AssayState, EisParams, EisSpectrum, ImpedancePoint } from './types';
+import type { AssayState, EisParams, EisSpectrum, ImpedancePoint, TracePoint } from './types';
 
 /** No twin_eis for this long -> stale. The backend ticks about once a
  * second, so a few missed ticks of slack before the scene freezes. */
@@ -100,7 +104,7 @@ function makeIdleState(): AssayState {
   return idleState;
 }
 
-function deriveState(reading: TwinEisReading): Omit<AssayState, 'stale'> {
+function deriveState(reading: TwinEisReading): Omit<AssayState, 'stale' | 'live'> {
   const e = reading.eis;
   const baseline = toParams(e.baseline_params, DEFAULTS.params);
   const current = toParams(e.params, baseline);
@@ -179,9 +183,41 @@ export function useLiveAssay(reading: TwinEisReading | null, connected: boolean)
     [baseKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // One sensorgram sample per reading. A different device/channel, or a
+  // simulated clock that went backwards (the simulation was restarted),
+  // starts a new trace; a repeat of the same instant replaces the last sample.
+  const traceRef = useRef<{ key: string; pts: TracePoint[]; count: number }>({ key: '', pts: [], count: 0 });
+  const feed = useMemo(() => {
+    const tr = traceRef.current;
+    if (!reading || !derived) {
+      traceRef.current = { key: '', pts: [], count: 0 };
+      return traceRef.current;
+    }
+    const key = `${reading.device_id}|${reading.channel_id}`;
+    const t = fin(reading.eis.t_s, tr.pts.length ? tr.pts[tr.pts.length - 1].t : 0);
+    const pt: TracePoint = { t, dRctPct: derived.deltaRctPct ?? 0, zMag: derived.zMag, theta: derived.coverage };
+    const lastT = tr.pts.length ? tr.pts[tr.pts.length - 1].t : -Infinity;
+    if (tr.key !== key || t < lastT) traceRef.current = { key, pts: [pt], count: 1 };
+    else if (t === lastT) traceRef.current = { key, pts: [...tr.pts.slice(0, -1), pt], count: tr.count };
+    else traceRef.current = { key, pts: [...tr.pts.slice(-(TRACE_MAX - 1)), pt], count: tr.count + 1 };
+    return traceRef.current;
+  }, [reading, derived]);
+
   const stale = !connected || !reading || timedOut;
   return useMemo<AssayState>(() => {
-    if (!derived) return makeIdleState();
-    return { ...derived, baselineSpectrum, stale };
-  }, [derived, baselineSpectrum, stale]);
+    if (!derived || !reading) return makeIdleState();
+    return {
+      ...derived,
+      baselineSpectrum,
+      stale,
+      live: {
+        sweepIndex: Math.max(0, feed.count - 1),
+        sweepProgress: 1,
+        sweepFreqHz: null,
+        labTimeS: fin(reading.eis.t_s, 0),
+        monitoring: true,
+        trace: feed.pts,
+      },
+    };
+  }, [derived, reading, baselineSpectrum, stale, feed]);
 }
