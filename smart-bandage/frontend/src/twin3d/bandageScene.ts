@@ -50,19 +50,6 @@ const VIEW_DIR: Record<ViewName, [number, number, number]> = {
   macro: [0.28, 0.32, 1],
 };
 
-/** Preferred screen-space direction of each pin's chip relative to its anchor (used to break ties). */
-const PIN_HINT: Record<PartKey, [number, number]> = {
-  rs: [1, 0.2],
-  rct: [-1, -0.1],
-  cdl: [-0.9, 0.5],
-  warburg: [-1, -0.5],
-  zmag: [0, -1],
-  phase: [-0.7, -0.7],
-  deltaZ: [0.4, 0.9],
-  coverage: [1, -0.4],
-  battery: [1, 0.1],
-};
-
 const fin = (v: unknown, fb: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fb);
 
 const DEFAULT_STATE: AssayState = {
@@ -185,12 +172,28 @@ export function createBandageScene(host: HTMLElement, opts: BandageSceneOptions 
   scene.add(key, rim, new THREE.HemisphereLight(0xbfd0ff, 0x1a1208, 0.35));
 
   /* ------------------------------------------------------------ pedestal */
-  const discMat = new THREE.MeshStandardMaterial({ color: 0x1a1d24, metalness: 0.6, roughness: 0.55, transparent: true, opacity: 0.72 });
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(6.6, 6.75, 0.16, 96), discMat);
-  disc.position.y = -0.12;
+  // soft floor: a radial alpha fade instead of a hard-edged slab, so it never reads as a clipped plate
+  const fadeCanvas = document.createElement('canvas');
+  fadeCanvas.width = fadeCanvas.height = 256;
+  {
+    const g = fadeCanvas.getContext('2d')!;
+    const grad = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    grad.addColorStop(0, '#fff');
+    grad.addColorStop(0.55, '#c8c8c8');
+    grad.addColorStop(1, '#000');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 256, 256);
+  }
+  const fadeTex = new THREE.CanvasTexture(fadeCanvas);
+  const discMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1d24, metalness: 0.4, roughness: 0.6, transparent: true, opacity: 0.8, alphaMap: fadeTex, depthWrite: false,
+  });
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(7.4, 96), discMat);
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.y = -0.06;
   disc.receiveShadow = true;
   scene.add(disc);
-  const ringOp = [0.25, 0.16, 0.1];
+  const ringOp = [0.3, 0.18, 0.08];
   const ringMats: THREE.MeshBasicMaterial[] = [];
   [5.0, 5.7, 6.4].forEach((r, i) => {
     const mat = new THREE.MeshBasicMaterial({ color: 0x5b8cff, transparent: true, opacity: ringOp[i], side: THREE.DoubleSide, depthWrite: false });
@@ -260,10 +263,10 @@ export function createBandageScene(host: HTMLElement, opts: BandageSceneOptions 
   /* ---------------------------------------------------------------- theme */
   let light = isLightTheme();
   function applyTheme(): void {
-    discMat.color.setHex(light ? 0xaab5cc : 0x1a1d24);
-    discMat.metalness = light ? 0.15 : 0.6;
-    discMat.roughness = light ? 0.7 : 0.55;
-    discMat.opacity = light ? 0.9 : 0.72;
+    discMat.color.setHex(light ? 0xdfe6f5 : 0x1a1d24);
+    discMat.metalness = light ? 0.05 : 0.4;
+    discMat.roughness = light ? 0.8 : 0.6;
+    discMat.opacity = light ? 0.95 : 0.8;
     ringMats.forEach((m, i) => {
       m.color.setHex(light ? 0x2f5fd0 : 0x5b8cff);
       m.opacity = ringOp[i] * (light ? 1.3 : 1);
@@ -454,8 +457,8 @@ export function createBandageScene(host: HTMLElement, opts: BandageSceneOptions 
     const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
     const tanH = tanV * aspect;
     // horizontal margin 0.9; vertical 0.84 leaves headroom for pin chips above the inset
-    const mx = 0.9;
-    const my = macro ? 0.86 : 0.82;
+    const mx = 0.94;
+    const my = macro ? 0.86 : 0.9;
     let lo = [Infinity, Infinity, Infinity];
     let hi = [-Infinity, -Infinity, -Infinity];
     for (const p of pts) {
@@ -499,6 +502,8 @@ export function createBandageScene(host: HTMLElement, opts: BandageSceneOptions 
   const dirV = new THREE.Vector3();
   function viewPose(v: ViewName, outP: THREE.Vector3, outT: THREE.Vector3): void {
     dirV.set(...VIEW_DIR[v]);
+    // tall/narrow canvas: look down more steeply so the long strip uses the vertical space
+    if (v === 'iso' && width / Math.max(1, height) < 1) dirV.set(0.5, 0.72, 0.9);
     fitPose(dirV, v === 'macro', toggles.explode ? 1 : 0, outP, outT);
   }
   function setView(v: ViewName, immediate = false): void {
@@ -702,62 +707,69 @@ export function createBandageScene(host: HTMLElement, opts: BandageSceneOptions 
   function declutter(items: Pin[]): void {
     const n = items.length;
     if (!n) return;
-    let mx = 0;
-    let my = 0;
-    for (const p of items) {
-      mx += p.ax;
-      my += p.ay;
-    }
-    mx /= n;
-    my /= n;
-    const gap = compact ? 3 : 5;
-    const lead = compact ? 14 : 20;
-    items.forEach((p) => {
-      const k = p.el.dataset.part as PartKey;
-      const hint = PIN_HINT[k];
-      let dx = p.ax - mx + hint[0] * 55;
-      let dy = p.ay - my + hint[1] * 55 - 6;
-      const len = Math.hypot(dx, dy) || 1;
-      dx /= len;
-      dy /= len;
-      p.cx = p.ax + dx * (p.w / 2 + lead);
-      p.cy = p.ay + dy * (p.h / 2 + lead);
-    });
+    const gap = compact ? 4 : 6;
+    const pad = 8;
     const W = width;
     const H = height;
-    const pad = 4;
-    for (let iter = 0; iter < 28; iter++) {
-      let moved = false;
-      for (let i = 0; i < n; i++) {
-        const a = items[i];
-        for (let j = i + 1; j < n; j++) {
-          const b = items[j];
-          const ox = (a.w + b.w) / 2 + gap - Math.abs(a.cx - b.cx);
-          const oy = (a.h + b.h) / 2 + gap - Math.abs(a.cy - b.cy);
-          if (ox <= 0 || oy <= 0) continue;
-          moved = true;
-          if (ox < oy * 4) {
-            const s = a.cx === b.cx ? (i % 2 ? 1 : -1) : Math.sign(a.cx - b.cx);
-            a.cx += (s * ox) / 2;
-            b.cx -= (s * ox) / 2;
-          } else {
-            const s = a.cy === b.cy ? (i % 2 ? 1 : -1) : Math.sign(a.cy - b.cy);
-            a.cy += (s * oy) / 2;
-            b.cy -= (s * oy) / 2;
-          }
+    // tall canvas: callout rows above/below the model; wide canvas: columns left/right of it
+    const rows = W / Math.max(1, H) < 1.25;
+    const key = (p: Pin) => (rows ? p.ay : p.ax);
+    const along = (p: Pin) => (rows ? p.ax : p.ay);
+    const sorted = [...items].sort((p, q) => key(p) - key(q));
+    // callouts sit just outside the cloud of anchors (not at the canvas edge) so leader lines stay short
+    const cloudLo = key(sorted[0]);
+    const cloudHi = key(sorted[n - 1]);
+    const lead = compact ? 26 : 34;
+    const extent = rows ? H : W;
+    const half = Math.ceil(n / 2);
+    const groups = [sorted.slice(0, half), sorted.slice(half)];
+    groups.forEach((grp, gi) => {
+      if (!grp.length) return;
+      grp.sort((p, q) => along(p) - along(q));
+      // pack into lines along the edge, wrapping when a line is full
+      const span = rows ? W : H;
+      const lines: Pin[][] = [[]];
+      let used = 0;
+      for (const p of grp) {
+        const size = (rows ? p.w : p.h) + gap;
+        if (used + size > span - 2 * pad && lines[lines.length - 1].length) {
+          lines.push([]);
+          used = 0;
         }
-        // the HUD card is an immovable obstacle
-        const hx = a.w / 2 + (hudRect.x1 - hudRect.x0) / 2 - Math.abs(a.cx - (hudRect.x0 + hudRect.x1) / 2);
-        const hy = a.h / 2 + (hudRect.y1 - hudRect.y0) / 2 - Math.abs(a.cy - (hudRect.y0 + hudRect.y1) / 2);
-        if (hx > 0 && hy > 0) {
-          moved = true;
-          if (hx < hy * 3) a.cx += a.cx >= (hudRect.x0 + hudRect.x1) / 2 ? hx : -hx;
-          else a.cy += a.cy >= (hudRect.y0 + hudRect.y1) / 2 ? hy : -hy;
-        }
-        if (W > a.w + 2 * pad) a.cx = clamp(a.cx, a.w / 2 + pad, W - a.w / 2 - pad);
-        if (H > a.h + 2 * pad) a.cy = clamp(a.cy, a.h / 2 + pad, H - a.h / 2 - pad);
+        lines[lines.length - 1].push(p);
+        used += size;
       }
-      if (!moved) break;
+      let offset = pad; // distance from the near edge of the canvas
+      for (const line of lines) {
+        const thick = Math.max(...line.map((p) => (rows ? p.h : p.w)));
+        const total = line.reduce((t, p) => t + (rows ? p.w : p.h) + gap, -gap);
+        const mean = line.reduce((t, p) => t + along(p), 0) / line.length;
+        let start = clamp(mean - total / 2, pad, Math.max(pad, span - pad - total));
+        for (const p of line) {
+          const size = rows ? p.w : p.h;
+          const mid = start + size / 2;
+          const want = gi === 0 ? cloudLo - lead - offset - thick / 2 : cloudHi + lead + offset + thick / 2;
+          const cross = clamp(want, pad + thick / 2, Math.max(pad + thick / 2, extent - pad - thick / 2));
+          if (rows) {
+            p.cx = mid;
+            p.cy = cross;
+          } else {
+            p.cx = cross;
+            p.cy = mid;
+          }
+          start += size + gap;
+        }
+        offset += thick + gap;
+      }
+    });
+    // the HUD card is an immovable obstacle: nudge any chip that lands on it
+    for (const a of items) {
+      const hx = a.w / 2 + (hudRect.x1 - hudRect.x0) / 2 - Math.abs(a.cx - (hudRect.x0 + hudRect.x1) / 2);
+      const hy = a.h / 2 + (hudRect.y1 - hudRect.y0) / 2 - Math.abs(a.cy - (hudRect.y0 + hudRect.y1) / 2);
+      if (hx > 0 && hy > 0) {
+        if (rows) a.cy = hudRect.y1 + a.h / 2 + gap;
+        else a.cx = hudRect.x1 + a.w / 2 + gap;
+      }
     }
   }
   function updatePins(f: Frame): void {
