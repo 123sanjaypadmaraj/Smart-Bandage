@@ -1,3 +1,33 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+
+node_modules/
+dist/
+build/
+
+.env
+.env.*
+!.env.example
+
+*.db
+
+# TLS cert/key pairs for docker-compose.tls.yml (docker/nginx.tls.conf) --
+# real or self-signed, neither belongs in version control.
+certs/
+
+# ESP-IDF
+firmware/**/build/
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
+
+.DS_Store
+Thumbs.db
+
 # Claude Code session/worktree scratch space -- worktrees under here are
 # full checkouts of other branches and must never be committed into
 # whichever branch happens to be checked out at the repo root.
