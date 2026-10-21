@@ -7,9 +7,11 @@ import { PHASE_LABEL } from "../twin3d/types";
 import type { AssayState, PartKey } from "../twin3d/types";
 import { useAssay } from "../twin3d/useAssay";
 import { useLiveAssay } from "../twin3d/useLiveAssay";
+import { useHardwareAssay } from "../twin3d/useHardwareAssay";
+import { HardwareEmulatorCard } from "./HardwareEmulatorCard";
 import { InfoHint } from "./InfoHint";
 
-type TwinMode = "manual" | "live";
+type TwinMode = "manual" | "live" | "emulator";
 
 /** The selected device's bandage-twin stream, from App's useDeviceSocket. */
 export interface BandageTwinLiveFeed {
@@ -70,12 +72,16 @@ export function BandageTwinView({ live }: Props) {
     setChannelPick(null);
   }, [deviceId]);
 
+  const hardware = useHardwareAssay();
+
   const hasLive = channels.length > 0;
-  const mode: TwinMode = live ? override ?? (hasLive ? "live" : "manual") : "manual";
-  const state: AssayState = mode === "live" ? liveState : manual.state;
+  const mode: TwinMode = override ?? (live && hasLive ? "live" : "manual");
+  const state: AssayState = mode === "live" ? liveState : mode === "emulator" ? hardware.state : manual.state;
 
   const statusText =
-    mode === "live"
+    mode === "emulator"
+      ? `Emulator · ${hardware.status.link}${hardware.state.phase !== "idle" ? ` · ${PHASE_LABEL[hardware.state.phase]}` : ""}`
+      : mode === "live"
       ? !reading
         ? "Live · waiting for bandage twin"
         : `Live · ${channel}${liveState.stale ? " · stale" : ""}`
@@ -89,12 +95,13 @@ export function BandageTwinView({ live }: Props) {
           <h1 className="font-display mt-1 text-xl font-semibold tracking-tight text-slate-900 dark:text-white">Smart Bandage — E. coli EIS Digital Twin</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {live && (
+          {(
             <div className="flex items-center gap-1" role="group" aria-label="Twin data source">
               {(
                 [
                   ["manual", "Manual assay", "Run the self-contained browser assay step by step"],
-                  ["live", "Live", "Show the backend bandage twin's live EIS readings for the selected device"],
+                  ...(live ? [["live", "Live", "Show the backend bandage twin's live EIS readings for the selected device"] as const] : []),
+                  ["emulator", "Emulator", "Stream the emulated hardware analyzer (E. coli EIS dataset) from the backend"],
                 ] as const
               ).map(([id, label, title]) => (
                 <button
@@ -111,7 +118,7 @@ export function BandageTwinView({ live }: Props) {
             </div>
           )}
           <p className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 dark:border-white/10 dark:text-slate-300" role="status" aria-live="polite">
-            {mode === "live" ? "Source" : "Step"}: <span className="font-semibold text-slate-900 dark:text-white">{statusText}</span>
+            {mode === "manual" ? "Step" : "Source"}: <span className="font-semibold text-slate-900 dark:text-white">{statusText}</span>
           </p>
         </div>
       </header>
@@ -126,6 +133,7 @@ export function BandageTwinView({ live }: Props) {
           />
         </div>
         <div className="space-y-4">
+          {mode === "emulator" && <HardwareEmulatorCard hardware={hardware} />}
           {mode === "live" && live && (
             <LiveFeedCard
               live={live}
@@ -136,7 +144,7 @@ export function BandageTwinView({ live }: Props) {
               onChannel={setChannelPick}
             />
           )}
-          <EisPanel state={state} controls={mode === "live" ? null : manual.controls} selected={selected} onSelect={setSelected} />
+          <EisPanel state={state} controls={mode === "manual" ? manual.controls : null} selected={selected} onSelect={setSelected} />
           {/* The cross-check compares the browser model with the backend at one
               fixed concentration; on the live path the concentration moves every
               tick (which resets the check), and the live data already IS the backend. */}
