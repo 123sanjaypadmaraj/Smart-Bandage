@@ -5,9 +5,9 @@ processing pipeline.
 
 Run it:
 
-    uvicorn backend.app.main:app --reload --app-dir smart-bandage
+    uvicorn backend.app.main:app --reload
 
-(or `cd smart-bandage && uvicorn backend.app.main:app --reload`)
+(from the repository root)
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from backend.app.logging_config import configure_logging
 from backend.app.metrics import MetricsMiddleware, metrics_response
 from backend.app.observability import init_sentry
 from backend.app.rate_limit import login_rate_limiter, refresh_rate_limiter
-from backend.app.routers import ai, alerts, auth, biomarkers, devices, eis, measurements, simulation, ws
+from backend.app.routers import ai, alerts, auth, biomarkers, devices, eis, hardware_eis, measurements, simulation, ws
 from backend.app.security import ensure_seed_user
 
 # Both run at import time (module scope, not inside lifespan) so they're
@@ -88,6 +88,7 @@ app.include_router(simulation.router)
 app.include_router(ws.router)
 app.include_router(ai.router)
 app.include_router(eis.router)
+app.include_router(hardware_eis.router)
 
 
 @app.get("/health", tags=["meta"])

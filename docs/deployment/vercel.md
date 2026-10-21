@@ -16,15 +16,15 @@ gets dropped). So the split is:
 
 ## 1. Import the repo into Vercel
 
-The repo is a monorepo (`smart-bandage/frontend` is two levels down from
+The repo is a monorepo (the dashboard lives in `frontend/` rather than at
 the git root). When importing the project in the Vercel dashboard:
 
-- **Root Directory**: `smart-bandage/frontend`
+- **Root Directory**: `frontend`
 - Framework preset auto-detects as **Vite** (also pinned explicitly in
   `frontend/vercel.json`: `buildCommand: npm run build`,
   `outputDirectory: dist`).
 
-Or via CLI from `smart-bandage/frontend`:
+Or via CLI from `frontend/`:
 
 ```
 npx vercel        # first deploy, links the project

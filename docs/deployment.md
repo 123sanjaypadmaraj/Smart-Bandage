@@ -64,10 +64,10 @@ a real `certbot` one and editing `docker/nginx.tls.conf`'s `server_name`
 ### A note on running this alongside other sessions
 
 Docker Compose derives its project name from the directory basename
-(`smart-bandage`) by default, and the Docker daemon is shared across every
+(e.g. `Smart Sense`) by default, and the Docker daemon is shared across every
 git worktree on a given machine — it is **not** scoped per worktree. If two
 concurrent sessions each run `docker compose up` from their own
-`smart-bandage/` worktree without an explicit `-p <unique-name>`, they will
+worktree without an explicit `-p <unique-name>`, they will
 silently fight over the same container/network/volume names and one will
 recreate (steal) the other's containers out from under it. This happened
 live during this verification (a concurrent session's plain `docker compose
@@ -108,7 +108,7 @@ fabricated or assumed, and a real deploy did not proceed without them.
 ### Exact remaining steps, if/when credentials are provided
 
 1. **Vercel**: `npx vercel` (or the Vercel dashboard) importing this repo
-   with Root Directory `smart-bandage/frontend` — framework
+   with Root Directory `frontend` — framework
    auto-detects/pins to Vite via `frontend/vercel.json`. Set
    `VITE_API_BASE_URL=https://<backend-host>` and
    `VITE_WS_BASE_URL=wss://<backend-host>` in Vercel's Production **and**

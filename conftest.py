@@ -4,6 +4,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Keep tests hermetic: load_dotenv() never overrides an already-set variable, so
+# pinning an empty key here stops a developer's real .env GEMINI_API_KEY from
+# leaking into /health and the Gemini client tests.
+os.environ["GEMINI_API_KEY"] = ""
+
 from hypothesis import settings
 
 # Two Hypothesis profiles, chosen by the HYPOTHESIS_PROFILE env var (unset
